@@ -60,6 +60,22 @@ def _run_single_episode(
         mask = game.get_action_mask()
 
         valid_action_count = int(np.sum(mask))
+        
+        mask_error = validate_action_mask(
+            mask,
+            valid_action_count
+        )
+        
+        if mask_error is not None:
+            return {
+                "won": False,
+                "reason": mask_error,
+                "steps": steps,
+                "branching_history": branching_history,
+                "action_history": action_history
+            }
+        
+        valid_action_count = int(np.sum(mask))
 
         # -----------------------------------------------------
         # Deadlock kontrolü
@@ -168,6 +184,33 @@ def _run_single_episode(
         "branching_history": branching_history,
         "action_history": action_history
     }
+def validate_action_mask(
+    action_mask: np.ndarray,
+    action: int
+) -> str | None:
+    """
+    Action mask'in BaseGameAdapter contract'ına uygun olup olmadığını kontrol eder. 
+    Geçerliyse: None 
+    Geçersizse: Hata sebebini string olarak döndürür.
+    """
+    # Mask gerçekten NumPy array mi?
+    if not isinstance(action_mask, np.ndarray):
+        return "invalid_action_mask_type"
+    
+    # Mask 1 boyutlu olmalı.
+    if action_mask.ndim != 1:
+        return "invalid_action_mask_dimension"
+    
+    # Mask uzunluğu action space ile aynı olmalı.
+    if len(action_mask) != max_actions:
+        return "invalid_action_mask_length"
+    
+    # Mask yalnızca 0 ve 1 içermeli.
+    if not np.all(np.isin(action_mask, [0, 1])):
+        return "invalid_action_mask_values"
+    
+    
+    return None
 
 
 def action_mask_is_invalid(
