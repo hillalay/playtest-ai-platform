@@ -53,13 +53,32 @@ def _run_single_episode(
         branching_history.append(valid_action_count)
 
         # Ajan hamle seçer
-        action = agent.act(obs, mask, game_adapter=game)
+        action = agent.act(obs, mask)
+        
+        if not isinstance(action, (int, np.integer)):
+            return { "won": False, 
+                     "reason": "invalid_action_type", 
+                     "steps": steps, 
+                     "branching_history": branching_history, "action_history": action_history 
+            }
+        action = int(action)
+        if action < 0 or action >= game.get_max_actions(): 
+            return { "won": False, 
+                    "reason": "invalid_action_range", 
+                    "steps": steps, "action": action, "branching_history": branching_history, "action_history": action_history 
+            }
+            
+        if action_mask[action] != 1: 
+            return { "won": False, 
+                    "reason": "invalid_action_mask", 
+                    "steps": steps, "action": action, "branching_history": branching_history, "action_history": action_history 
+            }
+            
         action_history.append(action)
-
-        # Hamleyi uygula
-        obs, reward, done, info = game.step(action)
+        # --------------------------------------------------------- # Action geçerli → oyuna gönder # ---------------------------------------------------------
+        obs, reward, done, info = game.step(action) 
         steps += 1
-
+        
         if done:
             is_win = (info.get("status") == "win" or info.get("reason") in ["cleared", "figure_rescued"])
             return {
