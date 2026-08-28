@@ -17,6 +17,27 @@ import numpy as np
 
 from core.base_adapter import BaseGameAdapter
 from core.base_agent import BaseAgent
+from core.base_agent import BaseAgent
+
+# ---------------------------------------------------------
+# Episode result constants
+# ---------------------------------------------------------
+
+RESULT_WIN = "win"
+RESULT_LOSS = "loss"
+RESULT_DEADLOCK = "deadlock"
+RESULT_TIMEOUT = "timeout"
+
+RESULT_INVALID_ACTION_TYPE = "invalid_action_type"
+RESULT_INVALID_ACTION_RANGE = "invalid_action_range"
+RESULT_INVALID_ACTION_MASK = "invalid_action_mask"
+
+RESULT_INVALID_MASK_TYPE = "invalid_action_mask_type"
+RESULT_INVALID_MASK_DIMENSIONS = "invalid_action_mask_dimensions"
+RESULT_INVALID_MASK_LENGTH = "invalid_action_mask_length"
+RESULT_INVALID_MASK_VALUES = "invalid_action_mask_values"
+
+
 
 
 def _run_single_episode(
