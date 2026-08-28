@@ -17,7 +17,6 @@ import numpy as np
 
 from core.base_adapter import BaseGameAdapter
 from core.base_agent import BaseAgent
-from core.base_agent import BaseAgent
 
 # ---------------------------------------------------------
 # Episode result constants
@@ -80,11 +79,11 @@ def _run_single_episode(
         # Mevcut durumdaki geçerli action'ları al.
         mask = game.get_action_mask()
 
-        valid_action_count = int(np.sum(mask))
+        max_actions = game.get_max_actions()
         
         mask_error = validate_action_mask(
             mask,
-            valid_action_count
+            max_actions
         )
         
         if mask_error is not None:
@@ -105,7 +104,7 @@ def _run_single_episode(
         if valid_action_count == 0:
             return {
                 "won": False,
-                "reason": "deadlock",
+                "reason": RESULT_DEADLOCK,
                 "steps": steps,
                 "branching_history": branching_history,
                 "action_history": action_history
@@ -127,7 +126,7 @@ def _run_single_episode(
         if not isinstance(action, (int, np.integer)):
             return {
                 "won": False,
-                "reason": "invalid_action_type",
+                "reason": RESULT_INVALID_ACTION_TYPE,
                 "steps": steps,
                 "branching_history": branching_history,
                 "action_history": action_history
@@ -141,7 +140,7 @@ def _run_single_episode(
         if action < 0 or action >= max_actions:
             return {
                 "won": False,
-                "reason": "invalid_action_range",
+                "reason": RESULT_INVALID_ACTION_RANGE,
                 "steps": steps,
                 "action": action,
                 "branching_history": branching_history,
@@ -152,7 +151,7 @@ def _run_single_episode(
         if action_mask_is_invalid(mask, action):
             return {
                 "won": False,
-                "reason": "invalid_action_mask",
+                "reason": RESULT_INVALID_ACTION_MASK,
                 "steps": steps,
                 "action": action,
                 "branching_history": branching_history,
@@ -200,7 +199,7 @@ def _run_single_episode(
 
     return {
         "won": False,
-        "reason": "timeout",
+        "reason": RESULT_TIMEOUT,
         "steps": steps,
         "branching_history": branching_history,
         "action_history": action_history
@@ -216,11 +215,11 @@ def validate_action_mask(
     """
     # Mask gerçekten NumPy array mi?
     if not isinstance(action_mask, np.ndarray):
-        return "invalid_action_mask_type"
+        return "RESULT_INVALID_MASK_TYPE"
     
     # Mask 1 boyutlu olmalı.
     if action_mask.ndim != 1:
-        return "invalid_action_mask_dimension"
+        return "RESULT_INVALID_MASK_DIMENSIONS"
     
     # Mask uzunluğu action space ile aynı olmalı.
     if len(action_mask) != max_actions:
@@ -332,13 +331,13 @@ class SimulationRunner:
         deadlocks = sum(
             1
             for result in results
-            if result["reason"] == "deadlock"
+            if result["reason"] == "RESULT_DEADLOCK"
         )
 
         timeouts = sum(
             1
             for result in results
-            if result["reason"] == "timeout"
+            if result["reason"] == "RESULT_TIMEOUT"
         )
 
         # -----------------------------------------------------
@@ -348,19 +347,19 @@ class SimulationRunner:
         invalid_action_type = sum(
             1
             for result in results
-            if result["reason"] == "invalid_action_type"
+            if result["reason"] == "RESULT_INVALID_ACTION_TYPE"
         )
 
         invalid_action_range = sum(
             1
             for result in results
-            if result["reason"] == "invalid_action_range"
+            if result["reason"] == "RESULT_INVALID_ACTION_RANGE"
         )
 
         invalid_action_mask = sum(
             1
             for result in results
-            if result["reason"] == "invalid_action_mask"
+            if result["reason"] == "RESULT_INVALID_ACTION_MASK"
         )
 
         invalid_actions = (
