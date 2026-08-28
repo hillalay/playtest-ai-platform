@@ -1,14 +1,18 @@
 """
 core/runner.py
-Çok Çekirdekli Paralel Simülasyon Motoru (Game-Agnostic Simulation Runner).
-Herhangi bir adaptörü ve ajanı alarak bir seviyeyi yüzlerce/binlerce kez 
-paralel çekirdeklerde oynatır ve ham metrikleri toplar.
+
+Çok Çekirdekli Paralel Simülasyon Motoru
+(Game-Agnostic Simulation Runner).
+
+Herhangi bir Game Adapter ve Agent alarak bir seviyeyi
+yüzlerce/binlerce kez paralel olarak simüle eder ve
+ham test metriklerini toplar.
 """
 
 from concurrent.futures import ProcessPoolExecutor
 import time
-import copy
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, Type
+
 import numpy as np
 
 from core.base_adapter import BaseGameAdapter
@@ -22,25 +26,45 @@ def _run_single_episode(
     max_steps: int = 150
 ) -> Dict[str, Any]:
     """
-    Tek bir simülasyon oyununu (episode) baştan sona oynatan bağımsız worker fonksiyonu.
-    Multiprocessing uyumluluğu için modül seviyesinde tanımlanmıştır.
+    Tek bir simulation episode'unu baştan sona çalıştırır.
+
+    Multiprocessing uyumluluğu için modül seviyesinde
+    tanımlanmıştır.
     """
-    # 1. Oyunu başlat ve seviyeyi yükle
+
+    # ---------------------------------------------------------
+    # 1. Oyunu başlat
+    # ---------------------------------------------------------
+
     game = adapter_cls()
+
     game.load_level(level_data)
+
     obs = game.reset()
+
+    # Her episode başında agent state'ini sıfırla.
     agent.reset()
 
     steps = 0
+
     branching_history = []
     action_history = []
-    
+
+    # ---------------------------------------------------------
     # 2. Oyun döngüsü
+    # ---------------------------------------------------------
+
     while steps < max_steps:
+
+        # Mevcut durumdaki geçerli action'ları al.
         mask = game.get_action_mask()
+
         valid_action_count = int(np.sum(mask))
-        
-        # Eğer hiç geçerli hamle kalmadıysa (Kilitlenme / Deadlock)
+
+        # -----------------------------------------------------
+        # Deadlock kontrolü
+        # -----------------------------------------------------
+
         if valid_action_count == 0:
             return {
                 "won": False,
@@ -52,44 +76,91 @@ def _run_single_episode(
 
         branching_history.append(valid_action_count)
 
-        # Ajan hamle seçer
+        # -----------------------------------------------------
+        # 3. Agent action seçer
+        # -----------------------------------------------------
+
         action = agent.act(obs, mask)
-        
+
+        # -----------------------------------------------------
+        # 4. Action validation
+        # -----------------------------------------------------
+
+        # Action gerçekten integer mı?
         if not isinstance(action, (int, np.integer)):
-            return { "won": False, 
-                     "reason": "invalid_action_type", 
-                     "steps": steps, 
-                     "branching_history": branching_history, "action_history": action_history 
-            }
-        action = int(action)
-        if action < 0 or action >= game.get_max_actions(): 
-            return { "won": False, 
-                    "reason": "invalid_action_range", 
-                    "steps": steps, "action": action, "branching_history": branching_history, "action_history": action_history 
-            }
-            
-        if action_mask[action] != 1: 
-            return { "won": False, 
-                    "reason": "invalid_action_mask", 
-                    "steps": steps, "action": action, "branching_history": branching_history, "action_history": action_history 
-            }
-            
-        action_history.append(action)
-        # --------------------------------------------------------- # Action geçerli → oyuna gönder # ---------------------------------------------------------
-        obs, reward, done, info = game.step(action) 
-        steps += 1
-        
-        if done:
-            is_win = (info.get("status") == "win" or info.get("reason") in ["cleared", "figure_rescued"])
             return {
-                "won": is_win,
-                "reason": info.get("reason", "cleared" if is_win else "loss"),
+                "won": False,
+                "reason": "invalid_action_type",
                 "steps": steps,
                 "branching_history": branching_history,
                 "action_history": action_history
             }
 
-    # Adım sınırı aşıldı (Zaman aşımı / Timeout)
+        action = int(action)
+
+        # Action ID action space sınırları içinde mi?
+        max_actions = game.get_max_actions()
+
+        if action < 0 or action >= max_actions:
+            return {
+                "won": False,
+                "reason": "invalid_action_range",
+                "steps": steps,
+                "action": action,
+                "branching_history": branching_history,
+                "action_history": action_history
+            }
+
+        # Action mask'e göre bu action gerçekten geçerli mi?
+        if action_mask_is_invalid(mask, action):
+            return {
+                "won": False,
+                "reason": "invalid_action_mask",
+                "steps": steps,
+                "action": action,
+                "branching_history": branching_history,
+                "action_history": action_history
+            }
+
+        action_history.append(action)
+
+        # -----------------------------------------------------
+        # 5. Geçerli action'ı oyuna uygula
+        # -----------------------------------------------------
+
+        obs, reward, done, info = game.step(action)
+
+        steps += 1
+
+        # -----------------------------------------------------
+        # 6. Oyun bitti mi?
+        # -----------------------------------------------------
+
+        if done:
+
+            is_win = (
+                info.get("status") == "win"
+                or info.get("reason") in [
+                    "cleared",
+                    "figure_rescued"
+                ]
+            )
+
+            return {
+                "won": is_win,
+                "reason": info.get(
+                    "reason",
+                    "cleared" if is_win else "loss"
+                ),
+                "steps": steps,
+                "branching_history": branching_history,
+                "action_history": action_history
+            }
+
+    # ---------------------------------------------------------
+    # 7. Maximum step sınırına ulaşıldı
+    # ---------------------------------------------------------
+
     return {
         "won": False,
         "reason": "timeout",
@@ -99,10 +170,27 @@ def _run_single_episode(
     }
 
 
+def action_mask_is_invalid(
+    action_mask: np.ndarray,
+    action: int
+) -> bool:
+    """
+    Action'ın action mask içerisinde geçerli olup olmadığını
+    kontrol eder.
+
+    True  -> action geçersiz
+    False -> action geçerli
+    """
+
+    return action_mask[action] != 1
+
+
 class SimulationRunner:
     """
-    Seviyeleri çoklu çekirdekte paralel simüle eden merkezi motor.
+    Seviyeleri çoklu çekirdekte paralel simüle eden
+    merkezi simulation motoru.
     """
+
     def __init__(self, max_workers: int = 4):
         self.max_workers = max_workers
 
@@ -115,40 +203,199 @@ class SimulationRunner:
         max_steps: int = 150
     ) -> Dict[str, Any]:
         """
-        Verilen seviyeyi belirtilen ajan ile 'iterations' (örn: 500) kez oynatır
-        ve istatistiksel sonuçları özetler.
+        Verilen seviyeyi belirtilen agent ile
+        'iterations' kez simüle eder.
+
+        Örneğin:
+
+            iterations = 500
+
+        ise level 500 kez oynatılır.
+
+        Sonuç olarak:
+
+            win_rate
+            deadlock_rate
+            timeout_rate
+            invalid_action_rate
+            avg_steps_to_win
+            min_steps_to_win
+            avg_branching_factor
+
+        gibi metrikler döndürülür.
         """
+
         start_time = time.time()
 
-        # Çoklu işlemci havuzunda paralel simülasyon
-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+        # -----------------------------------------------------
+        # Paralel simulation
+        # -----------------------------------------------------
+
+        with ProcessPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+
             futures = [
-                executor.submit(_run_single_episode, adapter_cls, level_data, agent, max_steps)
+                executor.submit(
+                    _run_single_episode,
+                    adapter_cls,
+                    level_data,
+                    agent,
+                    max_steps
+                )
                 for _ in range(iterations)
             ]
-            results = [f.result() for f in futures]
+
+            results = [
+                future.result()
+                for future in futures
+            ]
 
         elapsed_time = time.time() - start_time
 
-        # Metriklerin Çıkarılması
+        # -----------------------------------------------------
+        # Temel metrikler
+        # -----------------------------------------------------
+
         total_runs = len(results)
-        wins = sum(1 for r in results if r["won"])
-        deadlocks = sum(1 for r in results if r["reason"] == "deadlock")
-        timeouts = sum(1 for r in results if r["reason"] == "timeout")
-        
-        winning_steps = [r["steps"] for r in results if r["won"]]
-        all_branching = [
-            b for r in results for b in r["branching_history"]
+
+        wins = sum(
+            1
+            for result in results
+            if result["won"]
+        )
+
+        deadlocks = sum(
+            1
+            for result in results
+            if result["reason"] == "deadlock"
+        )
+
+        timeouts = sum(
+            1
+            for result in results
+            if result["reason"] == "timeout"
+        )
+
+        # -----------------------------------------------------
+        # Invalid action metrikleri
+        # -----------------------------------------------------
+
+        invalid_action_type = sum(
+            1
+            for result in results
+            if result["reason"] == "invalid_action_type"
+        )
+
+        invalid_action_range = sum(
+            1
+            for result in results
+            if result["reason"] == "invalid_action_range"
+        )
+
+        invalid_action_mask = sum(
+            1
+            for result in results
+            if result["reason"] == "invalid_action_mask"
+        )
+
+        invalid_actions = (
+            invalid_action_type
+            + invalid_action_range
+            + invalid_action_mask
+        )
+
+        # -----------------------------------------------------
+        # Step metrikleri
+        # -----------------------------------------------------
+
+        winning_steps = [
+            result["steps"]
+            for result in results
+            if result["won"]
         ]
+
+        # -----------------------------------------------------
+        # Branching metrikleri
+        # -----------------------------------------------------
+
+        all_branching = [
+            branching
+            for result in results
+            for branching in result["branching_history"]
+        ]
+
+        # -----------------------------------------------------
+        # Final report
+        # -----------------------------------------------------
 
         return {
             "agent_name": agent.name,
+
             "total_simulations": total_runs,
-            "win_rate": round(wins / total_runs, 4),
-            "deadlock_rate": round(deadlocks / total_runs, 4),
-            "timeout_rate": round(timeouts / total_runs, 4),
-            "avg_steps_to_win": round(float(np.mean(winning_steps)), 2) if winning_steps else None,
-            "min_steps_to_win": int(np.min(winning_steps)) if winning_steps else None,
-            "avg_branching_factor": round(float(np.mean(all_branching)), 2) if all_branching else 0.0,
-            "simulation_time_sec": round(elapsed_time, 3)
+
+            "win_rate": round(
+                wins / total_runs,
+                4
+            ),
+
+            "deadlock_rate": round(
+                deadlocks / total_runs,
+                4
+            ),
+
+            "timeout_rate": round(
+                timeouts / total_runs,
+                4
+            ),
+
+            "invalid_action_rate": round(
+                invalid_actions / total_runs,
+                4
+            ),
+
+            "invalid_action_type_rate": round(
+                invalid_action_type / total_runs,
+                4
+            ),
+
+            "invalid_action_range_rate": round(
+                invalid_action_range / total_runs,
+                4
+            ),
+
+            "invalid_action_mask_rate": round(
+                invalid_action_mask / total_runs,
+                4
+            ),
+
+            "avg_steps_to_win": (
+                round(
+                    float(np.mean(winning_steps)),
+                    2
+                )
+                if winning_steps
+                else None
+            ),
+
+            "min_steps_to_win": (
+                int(np.min(winning_steps))
+                if winning_steps
+                else None
+            ),
+
+            "avg_branching_factor": (
+                round(
+                    float(np.mean(all_branching)),
+                    2
+                )
+                if all_branching
+                else 0.0
+            ),
+
+            "simulation_time_sec": round(
+                elapsed_time,
+                3
+            )
         }
+
