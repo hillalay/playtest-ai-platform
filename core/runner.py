@@ -1,30 +1,16 @@
 """
 core/runner.py
 
-Çok çekirdekli paralel simülasyon motoru.
+Game-Agnostic Simulation Runner.
 
-(Game-Agnostic Simulation Runner)
-
-Herhangi bir Game Adapter ve Agent alarak bir seviyeyi
-yüzlerce/binlerce kez paralel olarak simüle eder ve
-ham test metriklerini toplar.
-
-Akış:
-
-    Level
-      ↓
-    Game Adapter
-      ↓
-    Agent
-      ↓
-    Episode
-      ↓
-    Metrics
+Bir GameAdapter ve Agent alarak bir level'ı
+birden fazla kez simüle eder ve temel
+playtest metriklerini üretir.
 """
 
 from concurrent.futures import ProcessPoolExecutor
-import time
 from typing import Any, Dict, Optional, Type
+import time
 
 import numpy as np
 
@@ -32,9 +18,9 @@ from core.base_adapter import BaseGameAdapter
 from core.base_agent import BaseAgent
 
 
-# ---------------------------------------------------------
-# Episode result constants
-# ---------------------------------------------------------
+# =========================================================
+# Result constants
+# =========================================================
 
 RESULT_WIN = "win"
 RESULT_LOSS = "loss"
@@ -51,44 +37,38 @@ RESULT_INVALID_MASK_LENGTH = "invalid_action_mask_length"
 RESULT_INVALID_MASK_VALUES = "invalid_action_mask_values"
 
 
-# ---------------------------------------------------------
-# Mask validation
-# ---------------------------------------------------------
+# =========================================================
+# Action mask validation
+# =========================================================
 
 def validate_action_mask(
     action_mask: np.ndarray,
     max_actions: int,
 ) -> Optional[str]:
     """
-    Action mask'in BaseGameAdapter contract'ına uygun olup
-    olmadığını kontrol eder.
+    Action mask'in BaseGameAdapter contract'ına
+    uygun olup olmadığını kontrol eder.
 
     Returns:
-
-        None
+        None:
             Mask geçerli.
 
-        string
-            Mask geçersiz ve hata sebebi.
+        str:
+            Mask geçersizse hata sebebi.
     """
 
-    # Mask gerçekten NumPy array mi?
     if not isinstance(action_mask, np.ndarray):
         return RESULT_INVALID_MASK_TYPE
 
-    # Mask 1 boyutlu olmalı.
     if action_mask.ndim != 1:
         return RESULT_INVALID_MASK_DIMENSIONS
 
-    # Mask uzunluğu action space ile aynı olmalı.
     if len(action_mask) != max_actions:
         return RESULT_INVALID_MASK_LENGTH
 
-    # Bool veya integer binary mask kabul ediyoruz.
     if action_mask.dtype.kind not in ("b", "i", "u"):
         return RESULT_INVALID_MASK_TYPE
 
-    # Mask yalnızca 0 ve 1 içermeli.
     if not np.all(np.isin(action_mask, [0, 1])):
         return RESULT_INVALID_MASK_VALUES
 
@@ -100,24 +80,16 @@ def action_mask_is_invalid(
     action: int,
 ) -> bool:
     """
-    Action'ın action mask içerisinde geçerli olup olmadığını
-    kontrol eder.
-
-    Returns:
-
-        True
-            Action geçersiz.
-
-        False
-            Action geçerli.
+    Verilen action'ın mask tarafından
+    geçerli kabul edilip edilmediğini kontrol eder.
     """
 
     return bool(action_mask[action] != 1)
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Single episode
-# ---------------------------------------------------------
+# =========================================================
 
 def _run_single_episode(
     adapter_cls: Type[BaseGameAdapter],
@@ -127,15 +99,15 @@ def _run_single_episode(
     seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Tek bir simulation episode'unu baştan sona çalıştırır.
+    Tek bir episode çalıştırır.
 
-    Multiprocessing uyumluluğu için modül seviyesinde
-    tanımlanmıştır.
+    Bu fonksiyon multiprocessing tarafından
+    ayrı process'lerde çalıştırılabilir.
     """
 
-    # ---------------------------------------------------------
-    # 0. Episode seed
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # Seed
+    # -----------------------------------------------------
 
     if seed is not None:
         np.random.seed(seed)
@@ -143,21 +115,18 @@ def _run_single_episode(
         try:
             agent.set_seed(seed)
         except Exception:
-            # Custom agent set_seed implementationinde problem
-            # olması simulation'ın tamamını kırmamalı.
             pass
 
-    # ---------------------------------------------------------
-    # 1. Oyunu başlat
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # Game initialization
+    # -----------------------------------------------------
 
     game = adapter_cls()
 
     game.load_level(level_data)
 
-    obs = game.reset()
+    observation = game.reset()
 
-    # Her episode başında agent state'ini sıfırla.
     agent.reset()
 
     steps = 0
@@ -165,21 +134,21 @@ def _run_single_episode(
     branching_history = []
     action_history = []
 
-    # ---------------------------------------------------------
-    # 2. Oyun döngüsü
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # Episode loop
+    # -----------------------------------------------------
 
     while steps < max_steps:
 
-        # -----------------------------------------------------
-        # Mevcut action mask
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Get action mask
+        # -------------------------------------------------
 
-        mask = game.get_action_mask()
+        action_mask = game.get_action_mask()
         max_actions = game.get_max_actions()
 
         mask_error = validate_action_mask(
-            mask,
+            action_mask,
             max_actions,
         )
 
@@ -192,11 +161,13 @@ def _run_single_episode(
                 "action_history": action_history,
             }
 
-        valid_action_count = int(np.sum(mask))
+        valid_action_count = int(
+            np.sum(action_mask)
+        )
 
-        # -----------------------------------------------------
-        # Deadlock kontrolü
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Deadlock
+        # -------------------------------------------------
 
         if valid_action_count == 0:
             return {
@@ -207,20 +178,27 @@ def _run_single_episode(
                 "action_history": action_history,
             }
 
-        branching_history.append(valid_action_count)
+        branching_history.append(
+            valid_action_count
+        )
 
-        # -----------------------------------------------------
-        # Agent action seçer
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Agent chooses action
+        # -------------------------------------------------
 
-        action = agent.act(obs, mask)
+        action = agent.act(
+            observation,
+            action_mask,
+        )
 
-        # -----------------------------------------------------
-        # Action validation
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Validate action type
+        # -------------------------------------------------
 
-        # Action gerçekten integer mı?
-        if not isinstance(action, (int, np.integer)):
+        if not isinstance(
+            action,
+            (int, np.integer),
+        ):
             return {
                 "won": False,
                 "reason": RESULT_INVALID_ACTION_TYPE,
@@ -231,7 +209,10 @@ def _run_single_episode(
 
         action = int(action)
 
-        # Action ID action space sınırları içinde mi?
+        # -------------------------------------------------
+        # Validate action range
+        # -------------------------------------------------
+
         if action < 0 or action >= max_actions:
             return {
                 "won": False,
@@ -242,8 +223,14 @@ def _run_single_episode(
                 "action_history": action_history,
             }
 
-        # Action mask'e göre action gerçekten geçerli mi?
-        if action_mask_is_invalid(mask, action):
+        # -------------------------------------------------
+        # Validate action mask
+        # -------------------------------------------------
+
+        if action_mask_is_invalid(
+            action_mask,
+            action,
+        ):
             return {
                 "won": False,
                 "reason": RESULT_INVALID_ACTION_MASK,
@@ -255,17 +242,19 @@ def _run_single_episode(
 
         action_history.append(action)
 
-        # -----------------------------------------------------
-        # Geçerli action'ı oyuna uygula
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Execute action
+        # -------------------------------------------------
 
-        obs, reward, done, info = game.step(action)
+        observation, reward, done, info = game.step(
+            action
+        )
 
         steps += 1
 
-        # -----------------------------------------------------
-        # Oyun bitti mi?
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Terminal state
+        # -------------------------------------------------
 
         if done:
 
@@ -297,9 +286,9 @@ def _run_single_episode(
                 "action_history": action_history,
             }
 
-    # ---------------------------------------------------------
-    # Maximum step sınırına ulaşıldı
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # Timeout
+    # -----------------------------------------------------
 
     return {
         "won": False,
@@ -310,17 +299,22 @@ def _run_single_episode(
     }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Simulation Runner
-# ---------------------------------------------------------
+# =========================================================
 
 class SimulationRunner:
     """
-    Seviyeleri çoklu çekirdekte paralel simüle eden
-    merkezi simulation motoru.
+    Merkezi simulation runner.
+
+    Bir level'ı bir Agent ile birden fazla kez
+    çalıştırır ve sonuçları toplar.
     """
 
-    def __init__(self, max_workers: int = 4):
+    def __init__(
+        self,
+        max_workers: int = 4,
+    ):
         if max_workers <= 0:
             raise ValueError(
                 "max_workers must be greater than 0"
@@ -337,28 +331,6 @@ class SimulationRunner:
         max_steps: int = 150,
         seed: int = 42,
     ) -> Dict[str, Any]:
-        """
-        Verilen seviyeyi belirtilen agent ile
-        'iterations' kez simüle eder.
-
-        Örneğin:
-
-            iterations = 500
-
-        ise level 500 kez oynatılır.
-
-        Sonuç olarak:
-
-            win_rate
-            deadlock_rate
-            timeout_rate
-            invalid_action_rate
-            avg_steps_to_win
-            min_steps_to_win
-            avg_branching_factor
-
-        gibi metrikler döndürür.
-        """
 
         if iterations <= 0:
             raise ValueError(
@@ -375,16 +347,19 @@ class SimulationRunner:
 
         start_time = time.time()
 
-        # -----------------------------------------------------
-        # Paralel simulation
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Parallel execution
+        # -------------------------------------------------
 
         with ProcessPoolExecutor(
             max_workers=self.max_workers
         ) as executor:
 
-            futures = [
-                executor.submit(
+            futures = []
+
+            for episode_index in range(iterations):
+
+                future = executor.submit(
                     _run_single_episode,
                     adapter_cls,
                     level_data,
@@ -392,8 +367,8 @@ class SimulationRunner:
                     max_steps,
                     seed + episode_index,
                 )
-                for episode_index in range(iterations)
-            ]
+
+                futures.append(future)
 
             results = [
                 future.result()
@@ -402,9 +377,9 @@ class SimulationRunner:
 
         elapsed_time = time.time() - start_time
 
-        # -----------------------------------------------------
-        # Temel metrikler
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Basic metrics
+        # -------------------------------------------------
 
         total_runs = len(results)
 
@@ -426,26 +401,29 @@ class SimulationRunner:
             if result["reason"] == RESULT_TIMEOUT
         )
 
-        # -----------------------------------------------------
-        # Invalid action metrikleri
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Invalid action metrics
+        # -------------------------------------------------
 
         invalid_action_type = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_ACTION_TYPE
+            if result["reason"]
+            == RESULT_INVALID_ACTION_TYPE
         )
 
         invalid_action_range = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_ACTION_RANGE
+            if result["reason"]
+            == RESULT_INVALID_ACTION_RANGE
         )
 
         invalid_action_mask = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_ACTION_MASK
+            if result["reason"]
+            == RESULT_INVALID_ACTION_MASK
         )
 
         invalid_actions = (
@@ -454,32 +432,36 @@ class SimulationRunner:
             + invalid_action_mask
         )
 
-        # -----------------------------------------------------
-        # Invalid mask metrikleri
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Invalid mask metrics
+        # -------------------------------------------------
 
         invalid_mask_type = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_MASK_TYPE
+            if result["reason"]
+            == RESULT_INVALID_MASK_TYPE
         )
 
         invalid_mask_dimensions = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_MASK_DIMENSIONS
+            if result["reason"]
+            == RESULT_INVALID_MASK_DIMENSIONS
         )
 
         invalid_mask_length = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_MASK_LENGTH
+            if result["reason"]
+            == RESULT_INVALID_MASK_LENGTH
         )
 
         invalid_mask_values = sum(
             1
             for result in results
-            if result["reason"] == RESULT_INVALID_MASK_VALUES
+            if result["reason"]
+            == RESULT_INVALID_MASK_VALUES
         )
 
         invalid_masks = (
@@ -489,9 +471,9 @@ class SimulationRunner:
             + invalid_mask_values
         )
 
-        # -----------------------------------------------------
-        # Step metrikleri
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Step metrics
+        # -------------------------------------------------
 
         winning_steps = [
             result["steps"]
@@ -499,19 +481,21 @@ class SimulationRunner:
             if result["won"]
         ]
 
-        # -----------------------------------------------------
-        # Branching metrikleri
-        # -----------------------------------------------------
+        # -------------------------------------------------
+        # Branching factor
+        # -------------------------------------------------
 
         all_branching = [
             branching
             for result in results
-            for branching in result["branching_history"]
+            for branching in result[
+                "branching_history"
+            ]
         ]
 
-        # -----------------------------------------------------
+        # -------------------------------------------------
         # Final report
-        # -----------------------------------------------------
+        # -------------------------------------------------
 
         return {
             "agent_name": agent.name,
@@ -580,7 +564,9 @@ class SimulationRunner:
 
             "avg_steps_to_win": (
                 round(
-                    float(np.mean(winning_steps)),
+                    float(
+                        np.mean(winning_steps)
+                    ),
                     2,
                 )
                 if winning_steps
@@ -595,7 +581,9 @@ class SimulationRunner:
 
             "avg_branching_factor": (
                 round(
-                    float(np.mean(all_branching)),
+                    float(
+                        np.mean(all_branching)
+                    ),
                     2,
                 )
                 if all_branching
