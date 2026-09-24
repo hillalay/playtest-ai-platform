@@ -174,4 +174,3 @@ EpsilonRandomAgent = HumanProxyAgent
 # Bir solver tarafından üretilen solution'ı oynar.
 #
 # Yeni kodda SolverAgent kullanılması tercih edilir.
-OptimalSolverAgent = SolverAgent
