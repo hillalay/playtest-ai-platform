@@ -1,0 +1,1 @@
+from games.arrow_puzzle.adapter import ArrowPuzzleAdapter

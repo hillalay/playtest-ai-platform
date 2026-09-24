@@ -594,4 +594,5 @@ class SimulationRunner:
                 elapsed_time,
                 3,
             ),
+            "results": results,
         }

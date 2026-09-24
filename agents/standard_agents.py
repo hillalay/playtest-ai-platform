@@ -41,6 +41,7 @@ from typing import Iterable, Optional
 import numpy as np
 
 from core.base_agent import BaseAgent
+from core.personas import PersonaProfile
 
 
 class RandomMaskedAgent(BaseAgent):
@@ -96,38 +97,28 @@ class RandomMaskedAgent(BaseAgent):
 
 class HumanProxyAgent(BaseAgent):
     """
-    Basit insan davranışı baseline agent'ı.
+    Parametrik insan davranışı baseline agent'ı.
 
-    error_rate / epsilon oranında rastgele geçerli bir
-    action seçer.
+    HumanProxyAgent doğrudan bir PersonaProfile kullanır.
 
-    Geri kalan durumda deterministic olarak ilk geçerli
-    action'ı seçer.
+    Örneğin:
 
-    Önemli:
+        HumanProxyAgent(DEFAULT_PERSONAS["rusher"])
 
-        Bu gerçek bir insan davranış modeli değildir.
+    veya:
 
-    Şimdilik playtest pipeline'ında basit bir human-like
-    baseline olarak kullanılır.
-
-    Örnek:
-
-        error_rate = 0.20
-
-        %20 -> random valid action
-        %80 -> deterministic first valid action
+        HumanProxyAgent(DEFAULT_PERSONAS["cautious"])
     """
 
-    def __init__(self, error_rate: float = 0.20) -> None:
-        super().__init__(name="HumanProxyAgent")
+    def __init__(
+        self,
+        persona: PersonaProfile,
+    ) -> None:
+        super().__init__(
+            name=f"HumanProxyAgent-{persona.name}"
+        )
 
-        if not 0.0 <= error_rate <= 1.0:
-            raise ValueError(
-                "error_rate must be between 0.0 and 1.0"
-            )
-
-        self.error_rate = float(error_rate)
+        self.persona = persona
 
         self._rng = random.Random()
 
@@ -135,6 +126,7 @@ class HumanProxyAgent(BaseAgent):
         """
         Agent'ın random generator'ını seed eder.
         """
+
         self._rng.seed(seed)
 
     def act(
@@ -143,109 +135,28 @@ class HumanProxyAgent(BaseAgent):
         action_mask: np.ndarray,
     ) -> int:
         """
-        Mevcut action mask üzerinden action seçer.
+        Persona profiline göre action seçer.
+
+        Şimdilik yalnızca error_rate davranışını kullanır.
+        Diğer persona parametreleri ilerleyen aşamalarda
+        davranışa bağlanacaktır.
         """
 
         valid_actions = np.flatnonzero(action_mask)
 
         if len(valid_actions) == 0:
             raise ValueError(
-                "HumanProxyAgent: No valid actions available."
+                f"{self.name}: No valid actions available."
             )
 
-        # İnsan hatası / dikkatsizlik anı
-        if self._rng.random() < self.error_rate:
-            return int(self._rng.choice(valid_actions))
+        # Persona'nın hata davranışı
+        if self._rng.random() < self.persona.error_rate:
+            return int(
+                self._rng.choice(valid_actions)
+            )
 
-        # Basit deterministic tercih
+        # Şimdilik mevcut baseline davranışını koruyoruz.
         return int(valid_actions[0])
-
-
-class SolverAgent(BaseAgent):
-    """
-    Bir solver tarafından üretilmiş çözüm dizisini oynayan agent.
-
-    SolverAgent çözüm üretmez.
-
-    Kendisine verilen solution'ı sırayla uygular.
-
-    Örneğin:
-
-        solution = [2, 5, 8, 3]
-
-    Agent:
-
-        2
-        5
-        8
-        3
-
-    action'larını sırasıyla döndürür.
-
-    Solver ile Agent arasındaki ayrım:
-
-        Solver:
-            Game State → Solution
-
-        SolverAgent:
-            Solution → Actions
-    """
-
-    def __init__(
-        self,
-        solution: Optional[Iterable[int]] = None,
-    ) -> None:
-        super().__init__(name="SolverAgent")
-
-        self.solution = (
-            [int(action) for action in solution]
-            if solution is not None
-            else []
-        )
-
-        self.solution_index = 0
-
-    def set_solution(self, solution: Iterable[int]) -> None:
-        """
-        Agent'a yeni bir çözüm dizisi verir.
-
-        Örneğin:
-
-            [2, 5, 8, 3]
-        """
-
-        self.solution = [int(action) for action in solution]
-        self.solution_index = 0
-
-    def reset(self) -> None:
-        """
-        Yeni episode başladığında çözümün başından başlar.
-        """
-
-        self.solution_index = 0
-
-    def act(
-        self,
-        observation: np.ndarray,
-        action_mask: np.ndarray,
-    ) -> int:
-        """
-        Çözüm dizisindeki sıradaki action'ı döndürür.
-
-        Agent'ın seçtiği action'ın gerçekten geçerli olup
-        olmadığını Runner kontrol eder.
-        """
-
-        if self.solution_index >= len(self.solution):
-            raise ValueError(
-                "SolverAgent has no remaining actions in the solution."
-            )
-
-        action = self.solution[self.solution_index]
-
-        self.solution_index += 1
-
-        return int(action)
 
 
 # ---------------------------------------------------------
