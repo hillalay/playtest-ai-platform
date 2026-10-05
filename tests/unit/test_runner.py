@@ -53,6 +53,19 @@ def test_runner_stops_when_no_actions_are_available():
     assert env.step_calls == 0
 
 
+def test_runner_reports_unsupported_action_enumeration():
+    class NonEnumeratingEnvironment(ResultEnvironment):
+        def valid_actions(self, state=None):
+            return None
+
+    env = NonEnumeratingEnvironment(StepResult({}))
+    result = EpisodeRunner().run(env, IncrementPolicy())
+    assert result.outcome == "UNSUPPORTED_ACTION_ENUMERATION"
+    assert result.issues
+    assert result.steps == env.step_calls == 0
+    assert result.trace.steps == []
+
+
 @pytest.mark.parametrize("game_outcome, expected", [
     ("SUCCESS", "SUCCESS"),
     ("FAILURE", "FAILURE"),

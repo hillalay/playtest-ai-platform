@@ -35,6 +35,7 @@ class GameAdapter(Protocol):
         self,
         state: Any | None = None,
     ) -> list[Action] | None:
+        """None means enumeration is unsupported; an empty list means no legal actions."""
         ...
 
     def step(

@@ -1,4 +1,5 @@
 from pathlib import Path
+from importlib.resources import files
 from typing import Any
 
 import json
@@ -7,8 +8,11 @@ from jsonschema import Draft202012Validator
 from playtest.core.errors import DefinitionError
 
 
-def load_schema(schema_path: str | Path) -> dict[str, Any]:
-    path = Path(schema_path)
+def load_schema(schema_path: str | Path | None = None) -> dict[str, Any]:
+    path = (
+        files("playtest.definition").joinpath("playtest_definition.schema.json")
+        if schema_path is None else Path(schema_path)
+    )
 
     try:
         return json.loads(

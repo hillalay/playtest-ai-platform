@@ -40,6 +40,11 @@ class FakeAdapter:
         ]
 
     def step(self, action):
+        if action not in self.valid_actions():
+            return StepResult(
+                next_observation={"value": self.value},
+                invalid_reason="Unknown action",
+            )
         if action.type == "increment":
             self.value += 1
 
@@ -48,6 +53,7 @@ class FakeAdapter:
                 "value": self.value
             },
             game_terminal=self.value >= 5,
+            game_outcome="SUCCESS" if self.value >= 5 else None,
             state_signature=str(self.value),
         )
 
@@ -61,7 +67,7 @@ class FakeAdapter:
         self.value = handle
 
     def goal_test(self, state=None):
-        return self.value >= 5
+        return (self.value if state is None else state["value"]) >= 5
 
     def events(self):
         return []
@@ -129,3 +135,33 @@ def test_adapter_goal():
         )
 
     assert adapter.goal_test() is True
+
+
+def test_adapter_runner_trace_end_to_end():
+    from playtest.orchestration.runner import EpisodeRunner
+    from playtest.policies.random import RandomPolicy
+
+    adapter = FakeAdapter()
+    adapter.load_level("level_1", seed=42)
+    result = EpisodeRunner().run(adapter, RandomPolicy(seed=42), max_steps=10, seed=42)
+    assert result.outcome == "SUCCESS"
+    assert result.steps == 5
+    assert result.trace.seed == 42
+    assert len(result.trace.steps) == 5
+    assert [s.observation["value"] for s in result.trace.steps] == list(range(5))
+    assert [s.next_observation["value"] for s in result.trace.steps] == list(range(1, 6))
+    assert [s.state_signature for s in result.trace.steps] == [str(i) for i in range(1, 6)]
+
+
+def test_adapter_rejects_unknown_action_without_changing_state():
+    adapter = FakeAdapter()
+    adapter.reset()
+    result = adapter.step(Action("unknown"))
+    assert result.invalid_reason == "Unknown action"
+    assert adapter.canonical_state() == b"0"
+
+
+def test_adapter_goal_test_uses_supplied_state():
+    adapter = FakeAdapter()
+    assert adapter.goal_test({"value": 5}) is True
+    assert adapter.goal_test() is False

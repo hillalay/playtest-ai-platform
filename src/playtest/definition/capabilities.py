@@ -68,10 +68,12 @@ def analyze_capabilities(
         False,
     )
 
-    deterministic = deterministic_value is True
+    # Seeded determinism assumes the same seed and restored RNG state.
+    deterministic = deterministic_value is True or deterministic_value == "seeded"
 
     goal_semantics = (
-        "success" in goals
+        isinstance(goals.get("success"), str)
+        and bool(goals["success"].strip())
     )
 
     event_instrumentation = bool(
@@ -97,12 +99,14 @@ def analyze_capabilities(
         and finite_actions
         and transition_model
         and goal_semantics
+        and deterministic
     ):
         solver_grade = SolverGrade.FULL_SEARCH
 
     elif (
         transition_model
         and goal_semantics
+        and deterministic
     ):
         solver_grade = SolverGrade.BOUNDED_SEARCH
 

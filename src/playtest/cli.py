@@ -26,9 +26,7 @@ def validate_game(
 
     definition = load_definition(definition_path)
 
-    schema = load_schema(
-        "schemas/playtest_definition.schema.json"
-    )
+    schema = load_schema()
 
     validate_definition(
         definition,
@@ -48,9 +46,7 @@ def capabilities(
 
     definition = load_definition(definition_path)
 
-    schema = load_schema(
-        "schemas/playtest_definition.schema.json"
-    )
+    schema = load_schema()
 
     validate_definition(
         definition,

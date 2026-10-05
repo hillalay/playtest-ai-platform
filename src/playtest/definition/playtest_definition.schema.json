@@ -12,7 +12,8 @@
   ],
   "properties": {
     "schema_version": {
-      "type": "string"
+      "type": "string",
+      "const": "1.0"
     },
     "game": {
       "type": "object",
@@ -93,8 +94,14 @@
       "type": "object",
       "required": ["success"],
       "properties": {
-        "success": {},
-        "failure": {}
+        "success": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "failure": {
+          "type": ["string", "null"],
+          "pattern": "\\S"
+        }
       },
       "additionalProperties": true
     },

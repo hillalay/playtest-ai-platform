@@ -1,4 +1,5 @@
 import time
+from copy import deepcopy
 
 from playtest.core.results import EpisodeResult
 from playtest.environment.interface import Environment
@@ -28,6 +29,15 @@ class EpisodeRunner:
 
             valid_actions = environment.valid_actions()
 
+            if valid_actions is None:
+                return EpisodeResult(
+                    outcome="UNSUPPORTED_ACTION_ENUMERATION",
+                    steps=step_index - 1,
+                    duration_seconds=time.perf_counter() - start_time,
+                    issues=["EpisodeRunner requires an enumerated list of valid actions"],
+                    trace=trace,
+                )
+
             if not valid_actions:
                 return EpisodeResult(
                     outcome="NO_VALID_ACTIONS",
@@ -50,16 +60,17 @@ class EpisodeRunner:
                     trace=trace,
                 )
 
-            previous_observation = observation
+            previous_observation = deepcopy(observation)
+            recorded_action = deepcopy(action)
             result = environment.step(action)
 
             trace.add_step(
                 TraceStep(
                     step_index=step_index,
                     observation=previous_observation,
-                    action=action,
-                    next_observation=result.next_observation,
-                    events=result.events,
+                    action=recorded_action,
+                    next_observation=deepcopy(result.next_observation),
+                    events=deepcopy(result.events),
                     state_signature=result.state_signature,
                 )
             )
