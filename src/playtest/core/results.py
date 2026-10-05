@@ -37,3 +37,4 @@ class EpisodeResult:
     coverage_summary: dict[str, Any] = field(default_factory=dict)
 
     trace_ref: str | None = None
+    trace: Any | None = None
