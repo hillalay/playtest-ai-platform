@@ -15,6 +15,9 @@ class EpisodeRunner:
         seed: int | None = None,
     ) -> EpisodeResult:
 
+        if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
+            raise ValueError("max_steps must be a positive integer")
+
         start_time = time.perf_counter()
 
         observation = environment.reset(seed=seed)
@@ -35,13 +38,36 @@ class EpisodeRunner:
                 valid_actions=valid_actions,
             )
 
+            if action not in valid_actions:
+                return EpisodeResult(
+                    outcome="INVALID_ACTION",
+                    steps=step_index - 1,
+                    duration_seconds=time.perf_counter() - start_time,
+                    issues=["Policy selected an action outside valid_actions"],
+                )
+
             result = environment.step(action)
 
             observation = result.next_observation
 
+            if result.invalid_reason is not None:
+                return EpisodeResult(
+                    outcome="INVALID_ACTION",
+                    steps=step_index,
+                    duration_seconds=time.perf_counter() - start_time,
+                    issues=[result.invalid_reason],
+                )
+
             if result.game_terminal:
                 return EpisodeResult(
-                    outcome="SUCCESS",
+                    outcome=result.game_outcome or "GAME_TERMINAL",
+                    steps=step_index,
+                    duration_seconds=time.perf_counter() - start_time,
+                )
+
+            if result.test_boundary_reached:
+                return EpisodeResult(
+                    outcome="TEST_BOUNDARY_REACHED",
                     steps=step_index,
                     duration_seconds=time.perf_counter() - start_time,
                 )

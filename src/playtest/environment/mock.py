@@ -50,6 +50,7 @@ class MockEnvironment:
             events=events,
             game_terminal=completed,
             state_signature=str(self.value),
+            game_outcome="SUCCESS" if completed else None,
         )
 
     def close(self) -> None:

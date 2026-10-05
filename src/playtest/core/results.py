@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from playtest.core.events import Event
-from playtest.core.actions import Action
 
 
 @dataclass
@@ -20,6 +19,9 @@ class StepResult:
     invalid_reason: str | None = None
 
     state_signature: str | None = None
+
+    # Termination alone does not imply success.
+    game_outcome: Literal["SUCCESS", "FAILURE"] | None = None
 
 
 @dataclass
