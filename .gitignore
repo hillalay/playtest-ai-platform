@@ -2,6 +2,13 @@ dosyalar
 arrow_puzzle
 /test_arrow_adapter.py
 /test_arrow_runner.py
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+build/
+dist/
+*.egg-info/
 
 
 

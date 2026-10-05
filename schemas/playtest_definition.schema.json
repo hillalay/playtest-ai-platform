@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Playtest Definition (contract pending)",
+  "$comment": "Placeholder: reject all definitions until the PGD contract is implemented.",
+  "not": {}
+}

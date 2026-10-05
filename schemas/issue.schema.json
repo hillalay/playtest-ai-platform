@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Issue (contract pending)",
+  "$comment": "Placeholder: reject all issues until the issue contract is implemented.",
+  "not": {}
+}

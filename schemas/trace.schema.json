@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Trace (contract pending)",
+  "$comment": "Placeholder: reject all traces until the trace contract is implemented.",
+  "not": {}
+}
