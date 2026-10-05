@@ -1,6 +1,158 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Playtest Definition (contract pending)",
-  "$comment": "Placeholder: reject all definitions until the PGD contract is implemented.",
-  "not": {}
+  "title": "Playtest Game Definition",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "game",
+    "environment",
+    "observation",
+    "actions",
+    "goals"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "game": {
+      "type": "object",
+      "required": ["id", "display_name", "deterministic"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "deterministic": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "enum": ["seeded"]
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "environment": {
+      "type": "object",
+      "required": ["time_model"],
+      "properties": {
+        "time_model": {
+          "type": "string",
+          "enum": ["discrete", "fixed_tick", "continuous"]
+        },
+        "supports_headless": {
+          "type": "boolean"
+        },
+        "parallel_safe": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "observation": {
+      "type": "object",
+      "properties": {
+        "canonical_state": {
+          "type": "boolean"
+        },
+        "stable_signature": {
+          "type": "boolean"
+        },
+        "privileged_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "actions": {
+      "type": "object",
+      "required": ["finite"],
+      "properties": {
+        "finite": {
+          "type": "boolean"
+        },
+        "masks_supported": {
+          "type": "boolean"
+        },
+        "definitions": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "goals": {
+      "type": "object",
+      "required": ["success"],
+      "properties": {
+        "success": {},
+        "failure": {}
+      },
+      "additionalProperties": true
+    },
+    "events": {
+      "type": "object",
+      "properties": {
+        "definitions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "boolean"
+        },
+        "transition": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "boolean"
+        },
+        "mechanics": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "solver": {
+      "type": "object",
+      "properties": {
+        "transition_model": {
+          "type": "boolean"
+        },
+        "clone_restore": {
+          "type": "boolean"
+        },
+        "cost": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "max_step_ms": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
 }

@@ -1,0 +1,52 @@
+schema_version: "1.0"
+
+game:
+  id: "example.arrow_grid"
+  display_name: "Arrow Grid"
+  deterministic: true
+
+environment:
+  time_model: "discrete"
+  supports_headless: true
+  parallel_safe: false
+
+observation:
+  canonical_state: true
+  stable_signature: true
+  privileged_fields: []
+
+actions:
+  finite: true
+  masks_supported: true
+
+  definitions:
+    select_arrow:
+      params:
+        arrow_id:
+          type: "entity_ref"
+
+goals:
+  success: "active_arrows == 0"
+  failure: null
+
+events:
+  definitions:
+    - "arrow_selected"
+    - "arrow_removed"
+    - "invalid_action"
+    - "level_completed"
+    - "level_failed"
+
+coverage:
+  state: true
+  transition: true
+  events: true
+  mechanics: true
+
+solver:
+  transition_model: true
+  clone_restore: true
+  cost: "step"
+
+runtime:
+  max_step_ms: 100
