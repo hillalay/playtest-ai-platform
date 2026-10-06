@@ -6,14 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "playtest-ai"
 version = "0.1.0"
 description = "Game-agnostic automated playtesting platform"
-requires-python = ">=3.13"
+requires-python = ">=3.10,<3.11"
 
 dependencies = [
     "pydantic",
     "pyyaml",
     "jsonschema",
     "typer",
-    "rich"
+    "rich",
+    "numpy>=1.23.5,<1.24.0"
 ]
 
 [project.optional-dependencies]
