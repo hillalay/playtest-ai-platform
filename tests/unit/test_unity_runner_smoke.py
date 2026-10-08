@@ -42,7 +42,7 @@ def test_batch_uses_runner_single_connection_and_separate_policy_seed(scene, mon
             (Steps(mask=[np.array([[False, True, True, True, True]])], values=(7, 0)), empty()),
             (Steps(values=(99, 99)), Steps(values=(0, 0))),
         ])
-    assert smoke.main(["--episodes", "3", "--max-steps", "50", "--seed", "42"]) == 0
+    assert smoke.main(["--episodes", "3", "--max-steps", "50", "--seed", "42", "--include-traces"]) == 0
     output = messages(capsys)
     records = [m for m in output if m["kind"] == "episode"]
     assert len(runs) == len(records) == 3 and len(connections) == 1
@@ -51,9 +51,10 @@ def test_batch_uses_runner_single_connection_and_separate_policy_seed(scene, mon
     assert all(seed is None for _, _, seed in runs)
     assert scene.reset_count == 3 and scene.close_count == 1
     assert scene.step_count == len(scene.sent) == 6
-    assert [sent[0][0] for sent in scene.sent] == [2, 0, 2, 0, 2, 0]
+    assert [sent[0][0] for sent in scene.sent] == [2, 0, 2, 0, 3, 0]
     assert all(r["outcome"] == "GAME_TERMINAL" and r["steps"] == 2 for r in records)
-    assert all(r["trace_validated"] and r["policy_seed"] == 42 for r in records)
+    assert all(r["trace_validated"] for r in records)
+    assert [r["policy_seed"] for r in records] == [42, 43, 44]
     for record in records:
         trace = record["trace"]
         assert trace["seed"] is None
@@ -70,6 +71,7 @@ def test_batch_uses_runner_single_connection_and_separate_policy_seed(scene, mon
     assert summary["outcomes"] == {"GAME_TERMINAL": 3}
     assert summary["total_steps"] == 6 and summary["technical_errors"] == 0
     assert summary["average_episode_seconds"] >= 0
+    assert summary["base_seed"] == 42 and summary["unique_action_sequences"] == 2
 
 
 @pytest.mark.parametrize("ending,outcome", [
@@ -83,7 +85,7 @@ def test_distinct_episode_stop_reasons(scene, capsys, ending, outcome):
         scene.frames.append((Steps(mask=[np.ones((1, 5), dtype=bool)]), empty()))
     else:
         scene.frames.append((Steps(), empty()))
-    assert smoke.main(["--episodes", "1", "--max-steps", "2", "--seed", "42"]) == 0
+    assert smoke.main(["--episodes", "1", "--max-steps", "2", "--seed", "42", "--include-traces"]) == 0
     output = messages(capsys)
     record = output[-2]
     assert record["outcome"] == outcome and record["trace_validated"]
@@ -101,7 +103,7 @@ def test_no_actions_on_reset_does_not_call_policy_or_step(unity, monkeypatch, ca
         raise AssertionError("Policy must not be called on an empty action list")
 
     monkeypatch.setattr(RandomPolicy, "select_action", unexpected_choice)
-    assert smoke.main(["--episodes", "3", "--seed", "42"]) == 0
+    assert smoke.main(["--episodes", "3", "--seed", "42", "--include-traces"]) == 0
     output = messages(capsys)
     assert output[-1]["outcomes"] == {"NO_VALID_ACTIONS": 3}
     assert output[-1]["total_steps"] == 0
@@ -116,7 +118,7 @@ def test_technical_error_stops_batch_and_closes(scene, monkeypatch, capsys, oper
         raise error
 
     monkeypatch.setattr(scene, operation, fail)
-    assert smoke.main(["--episodes", "3", "--seed", "42"]) == 1
+    assert smoke.main(["--episodes", "3", "--seed", "42", "--include-traces"]) == 1
     output = messages(capsys)
     record = output[-2]
     assert record["outcome"] == "TECHNICAL_ERROR" and record["trace_validated"]
@@ -137,7 +139,7 @@ def test_disconnect_preserves_partial_trace_and_total_returned_steps(scene, monk
         step()
 
     monkeypatch.setattr(scene, "step", fail_second)
-    assert smoke.main(["--episodes", "3", "--seed", "42"]) == 1
+    assert smoke.main(["--episodes", "3", "--seed", "42", "--include-traces"]) == 1
     output = messages(capsys)
     record = output[-2]
     assert record["outcome"] == "TECHNICAL_ERROR" and record["steps"] == 1
@@ -287,3 +289,90 @@ def test_cli_process_exits_nonzero_without_a_real_unity_connection():
     assert result.returncode == 1
     output = [json.loads(line) for line in result.stdout.splitlines()]
     assert output[-1]["technical_errors"] == 1 and output[-1]["completed_episodes"] == 0
+
+
+def test_100_episode_batch_reports_diversity_with_compact_default_output(scene, capsys):
+    for _ in range(100):
+        scene.frames.extend([
+            (Steps(), empty()),
+            (Steps(), empty()),
+            (empty(), Steps(values=(0, 0))),
+        ])
+    assert smoke.main(["--episodes", "100", "--max-steps", "50", "--seed", "42"]) == 0
+    output = messages(capsys)
+    records = [r for r in output if r["kind"] == "episode"]
+    assert len(records) == 100 and all("trace" not in r for r in records)
+    assert [r["policy_seed"] for r in records] == list(range(42, 142))
+    assert scene.reset_count == 100 and scene.step_count == len(scene.sent) == 300
+    assert scene.close_count == 1
+    summary = output[-1]
+    assert summary["completed_episodes"] == summary["diversity_episodes"] == 100
+    assert summary["total_steps"] == 300 and summary["unique_action_sequences"] > 1
+    assert summary["technical_errors"] == 0 and summary["diversity_excluded_episodes"] == 0
+    assert summary["diversity_supported"] and "engine-index" in summary["action_sequence_basis"]
+    assert all(len(json.dumps(record)) < 1500 for record in records)
+
+
+def test_optional_total_budget_stops_without_failure_or_extra_episode(scene, capsys):
+    assert smoke.main([
+        "--episodes", "10", "--max-steps", "3", "--max-total-steps", "5", "--seed", "42",
+    ]) == 0
+    output = messages(capsys)
+    records = [r for r in output if r["kind"] == "episode"]
+    assert [r["step_budget"] for r in records] == [3, 2]
+    assert scene.step_count == len(scene.sent) == output[-1]["total_steps"] == 5
+    assert scene.reset_count == 2 and scene.close_count == 1
+    assert output[-1]["stop_reason"] == "TOTAL_STEP_LIMIT_REACHED"
+    assert output[-1]["completed_episodes"] == 2 and output[-1]["unattempted_episodes"] == 8
+    assert output[-1]["technical_errors"] == 0
+
+
+def test_zero_total_budget_opens_no_connection(unity, capsys):
+    assert smoke.main(["--episodes", "10", "--max-total-steps", "0", "--seed", "42"]) == 0
+    output = messages(capsys)
+    assert output[-1]["stop_reason"] == "TOTAL_STEP_LIMIT_REACHED"
+    assert output[-1]["attempted_episodes"] == output[-1]["total_steps"] == 0
+    assert unity.kwargs is None and unity.reset_count == unity.step_count == unity.close_count == 0
+
+
+def test_omitted_seed_is_generated_recorded_and_used(scene, monkeypatch, capsys):
+    monkeypatch.setattr("playtest.orchestration.batch.secrets.randbits", lambda bits: 54321)
+    assert smoke.main(["--episodes", "2", "--max-steps", "1"]) == 0
+    output = messages(capsys)
+    assert output[-1]["base_seed"] == 54321
+    assert [r["policy_seed"] for r in output if r["kind"] == "episode"] == [54321, 54322]
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "oops"])
+def test_invalid_total_budget_is_rejected_before_connection(unity, value):
+    with pytest.raises(SystemExit) as exc:
+        smoke.main(["--max-total-steps", value])
+    assert exc.value.code == 2 and unity.kwargs is None
+
+
+def test_unsupported_diversity_fails_smoke_without_inventing_a_count(unity, monkeypatch, capsys):
+    from playtest.orchestration.batch import BatchRunner
+    from test_batch import FakeAdapter, random_factory
+
+    batch = BatchRunner().run(
+        FakeAdapter(actions=[Action("pick", {"coords": (1, 2)})]), random_factory,
+        episodes=1, base_seed=42,
+    )
+    monkeypatch.setattr(BatchRunner, "run", lambda *args, **kwargs: batch)
+    assert smoke.main(["--episodes", "1", "--seed", "42"]) == 1
+    summary = messages(capsys)[-1]
+    assert summary["completed_episodes"] == 1 and summary["technical_errors"] == 0
+    assert summary["unique_action_sequences"] is None and not summary["diversity_supported"]
+
+
+def test_interrupt_during_diversity_keeps_episode_report_and_closes(scene, monkeypatch, capsys):
+    def interrupt(actions):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("playtest.orchestration.batch.action_sequence_signature", interrupt)
+    assert smoke.main(["--episodes", "3", "--max-steps", "1", "--seed", "42"]) == 130
+    output = messages(capsys)
+    assert output[-2]["outcome"] == "STEP_LIMIT_REACHED" and output[-2]["steps"] == 1
+    assert output[-1]["completed_episodes"] == 1 and output[-1]["stop_reason"] == "INTERRUPTED"
+    assert output[-1]["unique_action_sequences"] is None
+    assert scene.reset_count == scene.close_count == 1

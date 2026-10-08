@@ -220,86 +220,156 @@ sources are outside this repository and have not been changed. The project owner
 reported the completed real Unity S3 validation: **100/100 episodes on one
 connection, 100 GAME_TERMINAL, 0 technical errors and 0 reset mismatches**.
 S3 is complete on that reported evidence; this is not a confirmed game-success
-count or a claim that the S4 Runner smoke has been run in Unity.
+count. The project owner also reported a real Unity S4.1-S4.3 Runner smoke
+result of 3/3 episodes. The S4.4 diversity batch still needs manual validation.
 
-### Manual Runner + RandomPolicy smoke check (Sprint S4.1-S4.3)
+### Runner + BatchRunner smoke check (Sprint S4.4)
 
-Use the same configured scene and Python 3.10 environment. Run this manually,
-then press Play in Unity Editor while the connection waits:
+The existing `EpisodeRunner` owns each episode: explicit reset, legal-action
+selection through the policy, adapter step, trace and stop conditions.
+`RandomPolicy` uses its own RNG and does not modify its inputs; the Runner copies
+observations/actions before passing them to policies. `BatchRunner` in
+`playtest.orchestration.batch` adds only sequential episode planning, policy
+factories, budgets, aggregation and action-sequence diversity. It has no Unity,
+ML-Agents or game-specific imports, and does not implement a second gameplay loop.
 
-```powershell
-.\.venv\Scripts\python.exe scripts\unity_runner_smoke.py --episodes 3 --max-steps 50 --seed 42
+A caller loads its level and retains ownership of the adapter. Example with an
+already-created adapter:
+
+```python
+from playtest.orchestration.batch import BatchRunner
+from playtest.policies.random import RandomPolicy
+
+try:
+    batch = BatchRunner().run(
+        adapter,
+        lambda episode_index, policy_seed: RandomPolicy(seed=policy_seed),
+        episodes=100,
+        max_steps=50,
+        base_seed=42,
+        max_total_steps=None,
+    )
+finally:
+    adapter.close()
 ```
 
-Defaults are three episodes and 50 actions per episode. `--seed` seeds only
-`RandomPolicy`; omitting it leaves action selection unseeded. `--behavior`,
-`--file-name`, `--timeout-wait` (default 120), and `--max-wait-steps` (default 100)
-have the same connection semantics as the S3 scripts. Episodes, action budget
-and timeout must be positive integers; waiting advances may be zero.
+`BatchRunner` reuses one adapter and one EpisodeRunner. It never closes the
+caller-owned adapter, loads a level, retries or reconnects. Each factory call
+receives a zero-based episode index and `policy_seed = base_seed + episode_index`.
+The factory creates the policy once for that episode and can return any object
+implementing the existing Policy contract. Only RandomPolicy is supplied by the
+Unity smoke script; no new policy implementations were added.
 
-The script selects `load_level("static")` once and creates one adapter and one
-Runner for the batch. Each episode creates a fresh `RandomPolicy` with the same
-provided seed and calls `EpisodeRunner.run(adapter, policy, max_steps=...)`.
-The Runner explicitly calls `adapter.reset(seed=None)` once per episode, selects
-and checks legal actions, advances the adapter and records the transitions.
-The script has no action-selection/gameplay loop and never resets a second time
-between Runner calls. The next Runner call owns the next explicit reset.
+With `base_seed=42`, policy seeds are 42, 43, 44, ... . With `base_seed=None`,
+a 64-bit seed is generated and stored as the actual `BatchResult.base_seed`;
+reuse that value to repeat the seed plan. Policy seeds are integers, including
+negative integers. The batch always calls EpisodeRunner with `seed=None`, so
+`adapter.reset(seed=None)` and `trace.seed=None` remain runtime-seed semantics.
+Policy seeds are recorded separately per episode. Different seeds may still
+produce the same choices, especially with few legal actions. Repeating a seed
+plan does not guarantee deterministic game state or a game win.
 
-Identical valid-action sequences produce identical choices when using the same
-policy seed. This does not seed Unity, guarantee deterministic gameplay, or
-guarantee a win. `policy_seed` is reported per episode; `trace.seed` retains its
-existing meaning as the environment reset seed and is `None` here. RandomPolicy
-does not modify its inputs. The Runner gives policies copied observations and
-action lists so a policy cannot mutate the adapter's state or legal-action check.
+`episodes` is the maximum requested number of attempts and `max_steps` is the
+per-episode action budget; both must be positive integers. Optional
+`max_total_steps` is non-negative. The batch passes
+`min(max_steps, remaining_total_steps)` to EpisodeRunner, so the total budget is
+not exceeded. A zero total budget creates no policy and performs no reset.
+`TOTAL_STEP_LIMIT_REACHED` stops before another episode and is distinct from a
+technical failure. If all requested episodes were attempted normally, the batch
+stop reason is `EPISODES_COMPLETED`, even when the last episode exhausted the
+remaining step budget.
 
-The existing Runner outcomes remain `GAME_TERMINAL`, `TEST_BOUNDARY_REACHED`,
-`NO_VALID_ACTIONS` and `STEP_LIMIT_REACHED` (the **MAX_STEPS** stop condition).
-An explicit game-protocol outcome can still yield `SUCCESS` or `FAILURE`; the
-raw Unity codec yields neither. Rejected actions are `INVALID_ACTION`, and
-unsupported enumeration is `UNSUPPORTED_ACTION_ENUMERATION`. These failures,
-technical errors, trace-validation failures and keyboard interruptions stop the
-batch before another episode. The adapter closes in `finally` after the batch;
-the backend may also close itself immediately on a transport failure.
+`BatchResult` and `BatchEpisodeResult` are additive dataclasses in
+`playtest.core.results`; existing GameAdapter, Action, StepResult, EpisodeResult
+and trace fields are unchanged. BatchResult contains requested/attempted/completed
+counts, recorded step totals, outcome counts, technical errors, episode records,
+actual base seed, timings, stop reason, stopped episode and diversity support.
+Each episode record contains its one-based number, policy seed, effective step
+budget, EpisodeResult, trace-validation status and optional sequence signature
+or diversity error. `stopped_episode` is the last attempted episode on early
+stopping, or None when no attempt was made or the request completed normally.
 
-TraceStep now has additive, defaulted fields for `reward_signals`,
-`game_terminal`, `test_boundary_reached`, `invalid_reason` and `game_outcome`.
-Each Runner step copies these along with action, observation, next observation,
-events and optional state signature. Missing reward signals remain `{}`; unknown
-state signatures/outcomes remain `None`. Legacy TraceStep construction still
-works; omitted terminal/boundary fields default to `None` (unknown). This adds
-recording, not a replay engine or a full-state/canonical-state guarantee.
+`completed_episodes` means a validated trace with one of `GAME_TERMINAL`,
+`SUCCESS`, `FAILURE`, `TEST_BOUNDARY_REACHED`, `NO_VALID_ACTIONS` or
+`STEP_LIMIT_REACHED`. Budget and no-action stops count as completed test episodes,
+not game wins. `STEP_LIMIT_REACHED` remains the existing MAX_STEPS outcome.
+Only an explicit game protocol can establish SUCCESS/FAILURE; the raw Unity
+codec leaves those unknown. Rejected actions, unsupported enumeration, technical
+errors, invalid traces and interruptions stop the batch before another attempt.
+Partial traces and issues are preserved, and remaining episodes are not counted
+as completed. Technical exceptions returned by EpisodeRunner or raised by the
+factory are recorded as `TECHNICAL_ERROR`; keyboard interruption is `INTERRUPTED`.
 
-Runner technical exceptions previously propagated. They now return an
-`EpisodeResult(outcome="TECHNICAL_ERROR")` containing issues and all completed
-trace entries. Keyboard interruption similarly returns `INTERRUPTED`. Invalid
-`max_steps` still raises `ValueError` before reset. A failed `step()` without a
-returned StepResult has no fabricated transition: step totals count recorded,
-returned transitions, and cannot prove whether Unity applied the last attempted
-command before a disconnect. Reset still returns only an observation; a terminal
-received during reset is exposed to this generic Runner as `NO_VALID_ACTIONS`.
-No Unity-specific state inspection has been added to the Runner.
+Unique action sequences are calculated from validated, normally ended test
+episodes only. A reliable zero-step episode is one empty action sequence.
+Failed/incomplete episodes are excluded and have no sequence signature, even
+when their partial trace is structurally valid. `diversity_episodes` reports the
+number included; `diversity_excluded_episodes` reports attempts excluded from
+the metric. These are bounded test-episode trajectories, not proof of complete
+gameplay paths, state coverage or transition coverage.
 
-Flushed JSON Lines contain a `start` record, an `episode` record for every
-attempt, and a final `summary`. Each episode includes the complete EpisodeResult
-and trace, its policy seed and trace-validation status. Validation checks step
-counts, action budget, consecutive indexes, stop flags and final outcome
-consistency. It does not prove gameplay correctness. The summary includes
-requested/completed/unattempted episode counts, outcome counts, total recorded
-steps, technical errors and average episode duration across all recorded
-attempts, including failed ones. With no recorded attempts the average is
-`None`; if trace validation fails the total step count is `None`. Episode timing
-includes reset (and initial connection) but excludes script reporting and final
-cleanup. Cleanup failures preserve episode results and fail the batch.
+`action_sequence_signature(actions)` serializes action type/params as a JSON
+array in a versioned envelope, with recursively sorted string dictionary keys,
+compact separators, UTF-8 and finite JSON numbers. SHA-256 yields
+`action-sequence-v1:sha256:<digest>`. Action order, list order, values and nesting
+matter; dictionary insertion order does not. This is an exact versioned JSON
+payload comparison, not game-semantic or full-state canonicalization. It uses no
+persistent Python hash, object identity, str/repr fallback or state signature.
+JSON scalars, lists and string-keyed dictionaries are supported; tuples, bytes,
+sets, custom objects, cycles, non-string keys and NaN/infinity are unsupported.
 
-Exit codes are `0` for all requested episodes ending normally with no cleanup
-error, `1` for a failed batch, `2` for invalid CLI arguments and `130` for keyboard
-interruption. A normal outcome includes a game terminal, boundary, no actions or
-step limit, and does not mean a game win. Pytest uses fake Unity transport and
-does not start this manual integration check against a real Editor or build.
+Unsupported action serialization leaves the episode outcome intact but sets a
+per-episode diversity error. The batch can finish its remaining episodes while
+reporting `diversity_supported=false` and `unique_action_sequences=None`, rather
+than undercounting unavailable sequences. The smoke check returns nonzero in
+that case. With the default Unity mapper, diversity measures only
+`unity_discrete` **engine-index action sequences**. Semantic comparisons require
+an explicit game-owned ActionMapper; equal indexes are not persistent entity IDs.
 
-Later S4 work includes persistent run storage, broader batch orchestration,
-RuleBasedPolicy, structured cancellation and overall wall-time budgets. The
-current smoke output can be redirected to a file; no replay, solver, coverage
-engine, RL, PlayHive exchange or dashboard has been added. The abstract Arrow
-PGD's richer capabilities are not runtime guarantees. Ponytail 5.1.0's existing
-configuration, including the disabled session-start hook, remains unchanged.
+For manual Unity validation, use the same configured scene and Python 3.10.
+Start either command, then press Play in Unity Editor while the connection waits:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\unity_runner_smoke.py --episodes 20 --max-steps 50 --seed 42
+.\.venv\Scripts\python.exe scripts\unity_runner_smoke.py --episodes 100 --max-steps 50 --seed 42
+```
+
+The commands are separate runs. Existing CLI flags still work: `--episodes`
+(default 3), `--max-steps` (50), `--behavior`, `--file-name`, `--timeout-wait` (120)
+and `--max-wait-steps` (100). **`--seed` now specifies the batch base policy seed**,
+replacing S4.1-S4.3's same-seed restart every episode. Omit it to generate and
+report a reusable actual seed. Add `--max-total-steps 500` for a shared action
+budget, or `--include-traces` to include full EpisodeResult/trace data.
+
+The script selects `load_level("static")` once, uses BatchRunner, and closes the
+adapter in `finally`. It prints a start record, then compact episode summaries
+and a batch summary as JSON Lines. Episode records are printed after BatchRunner
+returns; full traces stay in memory and are output only with `--include-traces`.
+Reports may be redirected to a JSONL file; persistent run storage is S4.5 work.
+The script reports its engine-index diversity basis explicitly. Technical and
+cleanup errors, unsupported diversity and failed outcomes produce exit code 1;
+CLI validation errors use 2, keyboard interruption uses 130. A normally completed
+request or an intentional total-budget stop uses 0 if there were no other errors.
+Always inspect requested/completed/unattempted counts when using a total budget.
+
+The reused trace validator checks step counts, action budget, consecutive indexes,
+stop flags and final-outcome consistency. TraceStep records copied action,
+observation, next observation, events, reward signals, terminal/boundary flags,
+invalid reason and optional outcome/signature. Missing rewards remain {}, and
+unknown signatures/outcomes remain None. No replay engine or state coverage was
+added. Batch durations include policy construction, episodes, validation and
+fingerprinting; episode durations come from EpisodeResult. Averages include
+recorded failed attempts. CLI output and final cleanup are outside batch timing.
+An empty batch has no average duration; a missing/invalid trace makes total_steps
+unknown (None). A failed step without a returned StepResult has no fabricated
+transition, and Unity may have applied that last command before disconnecting.
+Waiting simulation advances remain separate from the logical action budget.
+
+The existing reset contract still returns only an observation: terminal on reset
+appears as NO_VALID_ACTIONS to the generic Runner. No engine-specific inspection
+was added. Multi-agent/parallel workers, wall-time cancellation, RuleBasedPolicy,
+RL, solver, replay, PlayHive exchange, dashboard and persistent storage remain
+outside this sprint. Existing S3 spike/smoke/stability scripts are unchanged.
+Ponytail 5.1.0 configuration, including the disabled session-start hook, remains
+unchanged. **S4.4 still requires real Unity batch output review, including actual
+unique_action_sequences; varying policy seeds alone is not evidence of new paths.**
