@@ -148,8 +148,9 @@ The ML-Agents constructor owns resources it creates before returning; its own
 failure cleanup applies when construction raises before the adapter acquires it.
 
 For Sprint S4, keep environment `seed=None`; `RandomPolicy(seed=...)` can still
-seed action selection independently. The current Runner propagates technical
-exceptions and needs orchestration-level error recording/cancellation later.
+seed action selection independently. The Runner returns `TECHNICAL_ERROR` with
+issues and a partial trace for technical exceptions, or `INTERRUPTED` for a
+keyboard interruption. The caller owns connection cleanup and batch stopping.
 It reports unknown termination as `GAME_TERMINAL`, interruption as
 `TEST_BOUNDARY_REACHED`, and no actions as `NO_VALID_ACTIONS`. A terminal received
 during reset also appears as no actions to the current Runner because reset
@@ -215,6 +216,90 @@ CLI arguments, and `130` for keyboard interruption.
 
 The offline pytest suite uses fake Unity transport; it does not open Unity.
 The existing spike and smoke scripts remain separate manual checks. Unity C#
-sources are outside this repository and have not been changed. **Sprint S3
-remains open until the real Unity 100-episode command has been run successfully
-and its episode/summary output reviewed.**
+sources are outside this repository and have not been changed. The project owner
+reported the completed real Unity S3 validation: **100/100 episodes on one
+connection, 100 GAME_TERMINAL, 0 technical errors and 0 reset mismatches**.
+S3 is complete on that reported evidence; this is not a confirmed game-success
+count or a claim that the S4 Runner smoke has been run in Unity.
+
+### Manual Runner + RandomPolicy smoke check (Sprint S4.1-S4.3)
+
+Use the same configured scene and Python 3.10 environment. Run this manually,
+then press Play in Unity Editor while the connection waits:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\unity_runner_smoke.py --episodes 3 --max-steps 50 --seed 42
+```
+
+Defaults are three episodes and 50 actions per episode. `--seed` seeds only
+`RandomPolicy`; omitting it leaves action selection unseeded. `--behavior`,
+`--file-name`, `--timeout-wait` (default 120), and `--max-wait-steps` (default 100)
+have the same connection semantics as the S3 scripts. Episodes, action budget
+and timeout must be positive integers; waiting advances may be zero.
+
+The script selects `load_level("static")` once and creates one adapter and one
+Runner for the batch. Each episode creates a fresh `RandomPolicy` with the same
+provided seed and calls `EpisodeRunner.run(adapter, policy, max_steps=...)`.
+The Runner explicitly calls `adapter.reset(seed=None)` once per episode, selects
+and checks legal actions, advances the adapter and records the transitions.
+The script has no action-selection/gameplay loop and never resets a second time
+between Runner calls. The next Runner call owns the next explicit reset.
+
+Identical valid-action sequences produce identical choices when using the same
+policy seed. This does not seed Unity, guarantee deterministic gameplay, or
+guarantee a win. `policy_seed` is reported per episode; `trace.seed` retains its
+existing meaning as the environment reset seed and is `None` here. RandomPolicy
+does not modify its inputs. The Runner gives policies copied observations and
+action lists so a policy cannot mutate the adapter's state or legal-action check.
+
+The existing Runner outcomes remain `GAME_TERMINAL`, `TEST_BOUNDARY_REACHED`,
+`NO_VALID_ACTIONS` and `STEP_LIMIT_REACHED` (the **MAX_STEPS** stop condition).
+An explicit game-protocol outcome can still yield `SUCCESS` or `FAILURE`; the
+raw Unity codec yields neither. Rejected actions are `INVALID_ACTION`, and
+unsupported enumeration is `UNSUPPORTED_ACTION_ENUMERATION`. These failures,
+technical errors, trace-validation failures and keyboard interruptions stop the
+batch before another episode. The adapter closes in `finally` after the batch;
+the backend may also close itself immediately on a transport failure.
+
+TraceStep now has additive, defaulted fields for `reward_signals`,
+`game_terminal`, `test_boundary_reached`, `invalid_reason` and `game_outcome`.
+Each Runner step copies these along with action, observation, next observation,
+events and optional state signature. Missing reward signals remain `{}`; unknown
+state signatures/outcomes remain `None`. Legacy TraceStep construction still
+works; omitted terminal/boundary fields default to `None` (unknown). This adds
+recording, not a replay engine or a full-state/canonical-state guarantee.
+
+Runner technical exceptions previously propagated. They now return an
+`EpisodeResult(outcome="TECHNICAL_ERROR")` containing issues and all completed
+trace entries. Keyboard interruption similarly returns `INTERRUPTED`. Invalid
+`max_steps` still raises `ValueError` before reset. A failed `step()` without a
+returned StepResult has no fabricated transition: step totals count recorded,
+returned transitions, and cannot prove whether Unity applied the last attempted
+command before a disconnect. Reset still returns only an observation; a terminal
+received during reset is exposed to this generic Runner as `NO_VALID_ACTIONS`.
+No Unity-specific state inspection has been added to the Runner.
+
+Flushed JSON Lines contain a `start` record, an `episode` record for every
+attempt, and a final `summary`. Each episode includes the complete EpisodeResult
+and trace, its policy seed and trace-validation status. Validation checks step
+counts, action budget, consecutive indexes, stop flags and final outcome
+consistency. It does not prove gameplay correctness. The summary includes
+requested/completed/unattempted episode counts, outcome counts, total recorded
+steps, technical errors and average episode duration across all recorded
+attempts, including failed ones. With no recorded attempts the average is
+`None`; if trace validation fails the total step count is `None`. Episode timing
+includes reset (and initial connection) but excludes script reporting and final
+cleanup. Cleanup failures preserve episode results and fail the batch.
+
+Exit codes are `0` for all requested episodes ending normally with no cleanup
+error, `1` for a failed batch, `2` for invalid CLI arguments and `130` for keyboard
+interruption. A normal outcome includes a game terminal, boundary, no actions or
+step limit, and does not mean a game win. Pytest uses fake Unity transport and
+does not start this manual integration check against a real Editor or build.
+
+Later S4 work includes persistent run storage, broader batch orchestration,
+RuleBasedPolicy, structured cancellation and overall wall-time budgets. The
+current smoke output can be redirected to a file; no replay, solver, coverage
+engine, RL, PlayHive exchange or dashboard has been added. The abstract Arrow
+PGD's richer capabilities are not runtime guarantees. Ponytail 5.1.0's existing
+configuration, including the disabled session-start hook, remains unchanged.

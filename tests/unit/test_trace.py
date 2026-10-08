@@ -61,3 +61,36 @@ def test_trace_snapshots_mutable_observations_actions_and_events():
     assert [s.next_observation["nested"]["value"] for s in result.trace.steps] == [1, 2]
     assert [s.action.params["value"] for s in result.trace.steps] == [0, 1]
     assert [s.events[0].payload["value"] for s in result.trace.steps] == [1, 2]
+
+
+def test_trace_preserves_reward_flags_invalid_reason_and_unknown_signature():
+    from playtest.core.results import StepResult
+    from test_runner import IncrementPolicy, ResultEnvironment
+
+    step_result = StepResult(
+        {"value": 1}, reward_signals={"progress": 7.5},
+        game_terminal=True, test_boundary_reached=True,
+        invalid_reason="rejected", game_outcome="FAILURE",
+    )
+    result = EpisodeRunner().run(ResultEnvironment(step_result), IncrementPolicy())
+    step_result.reward_signals["progress"] = -100
+    step_result.next_observation["value"] = 999
+    step_result.game_terminal = False
+    step = result.trace.steps[0]
+    assert step.reward_signals == {"progress": 7.5}
+    assert step.game_terminal is True and step.test_boundary_reached is True
+    assert step.invalid_reason == "rejected" and step.game_outcome == "FAILURE"
+    assert step.state_signature is None
+    assert step.next_observation == {"value": 1}
+    assert result.outcome == "INVALID_ACTION"
+
+
+def test_trace_leaves_absent_reward_signals_empty():
+    from playtest.core.results import StepResult
+    from test_runner import IncrementPolicy, ResultEnvironment
+
+    result = EpisodeRunner().run(ResultEnvironment(StepResult({})), IncrementPolicy(), max_steps=1)
+    step = result.trace.steps[0]
+    assert step.reward_signals == {}
+    assert step.game_terminal is False and step.test_boundary_reached is False
+    assert step.game_outcome is None and step.state_signature is None
