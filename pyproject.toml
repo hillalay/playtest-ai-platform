@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+unity = [
+    "mlagents-envs==1.1.0"
+]
 dev = [
     "pytest"
 ]

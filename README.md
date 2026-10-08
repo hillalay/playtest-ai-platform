@@ -28,45 +28,135 @@ Define the Universal Test Model contracts, replace the schema placeholders, and 
 
 ## Unity ML-Agents adapter
 
-`playtest.adapters.unity_mlagents.UnityMLAgentsAdapter` implements the current
-`src/playtest/adapters/base.py` GameAdapter protocol. Use the same Python 3.10
-environment and compatible `mlagents-envs` installation as `scripts/unity_spike.py`.
-ML-Agents is imported lazily when connecting; ordinary unit tests need no Unity
-process or ML-Agents installation.
+`playtest.adapters.unity_mlagents.UnityMLAgentsAdapter` version **0.2.0** implements
+the existing `GameAdapter` protocol without changes to core, Runner or policies.
+The backend owns Unity lifecycle, behavior/agent selection, mask validation,
+bounded decision waiting, observation caching and `StepResult` construction.
+`ObservationCodec` and `ActionMapper` in `playtest.adapters.unity_codecs` own
+game semantics. ML-Agents imports are lazy and confined to the backend.
 
-Manual integration check: open the Arrow Puzzle scene in Unity and start Play
-when the connection waits. Run this separately from the unit suite:
+Use Python **3.10** and the validated spike's **mlagents-envs 1.1.0**. The optional
+`unity` extra pins that version; it is unnecessary for offline unit tests.
 
-```python
-from playtest.adapters.unity_mlagents import UnityMLAgentsAdapter
-
-adapter = UnityMLAgentsAdapter(file_name=None, timeout_wait=120)
-try:
-    adapter.load_level("static")
-    observation = adapter.reset()
-    print(observation, adapter.canonical_state())
-    actions = adapter.valid_actions()
-    if actions:
-        result = adapter.step(actions[0])
-        print(result, adapter.valid_actions(), adapter.goal_test())
-finally:
-    adapter.close()
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e '.[dev,unity]'
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
 ```
 
-This first version requires exactly one behavior, one agent, one discrete action
-branch, and one vector observation with five integer values per arrow:
-`arrowId, row, column, direction, isActive`. Each reset/step must return a decision
-or terminal for that agent; delayed decisions and multiple agents are unsupported.
-Observations become plain dictionaries of sorted arrow records; canonical state
-is deterministic UTF-8 JSON bytes. Actions are
-`Action("select_arrow", {"action_id": N})`, where N is the Unity branch index,
-not a separately inferred arrow ID. Missing masks enable the whole discrete branch.
+For a manual integration check, open the already configured Unity scene. Its
+agent must use Behavior Type `Default`. Run the following from the repository
+root, then press Play in Unity when the connection waits. Omit `--behavior` when
+the environment advertises exactly one behavior; otherwise use its exact name
+(including an ML-Agents team suffix, if present).
 
-`load_level("static")` explicitly leaves the current scene in place. Other level
-references, runtime seeds, arbitrary-state action queries and state restoration
-raise `EnvironmentError`. Cloning returns `None`; events return an empty list.
-Reset connects lazily and resets the Unity episode; close is idempotent and final.
-Terminal episodes have no legal actions. Non-interrupted termination sets
-`game_terminal`; interruption sets `test_boundary_reached`. Neither implies
-success: `goal_test()` and `game_outcome` remain `None` until Unity exposes a
-verified completion/failure signal. No gameplay or runner integration is included.
+```powershell
+.\.venv\Scripts\python.exe scripts\unity_adapter_smoke.py --steps 3
+.\.venv\Scripts\python.exe scripts\unity_adapter_smoke.py --behavior 'YourBehavior?team=0' --steps 3
+```
+
+These are alternative invocations. The smoke check connects with `file_name=None`,
+resets, enumerates and sends legal actions, stops at termination or interruption,
+then explicitly resets again and closes. It reports observations without claiming
+reset determinism or game success. No legal actions is reported without inventing
+a command. It is never run automatically by pytest. `--file-name` may name an
+existing compatible Unity executable; the adapter still cannot inject levels.
+`scripts/unity_spike.py` remains unchanged and can still be run separately:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\unity_spike.py
+```
+
+The raw codec preserves every sensor tensor, in sensor order, as nested Python
+lists under `{"observations": [...]}`. It accepts sensor shapes from the actual
+behavior spec, including multiple tensors, without an Arrow record format.
+It cannot establish complete semantic state or an outcome, so `canonical_state()`,
+`state_signature`, `goal_test()` and `game_outcome` are `None` by default.
+
+The default mapper uses `Action("unity_discrete", {"index": N})`. This is explicitly
+an engine command for local smoke testing, **not a cross-product semantic action**.
+Configure semantic actions through an explicit table that covers every index of
+the actual branch with unique actions. For example, for a verified five-action
+game integration (the entity IDs below are illustrative):
+
+```python
+from playtest.adapters.unity_codecs import DiscreteActionMapper
+from playtest.adapters.unity_mlagents import UnityMLAgentsAdapter
+from playtest.core.actions import Action
+
+mapper = DiscreteActionMapper({
+    index: Action("select_arrow", {"arrow_id": entity_id})
+    for index, entity_id in enumerate([90, 12, 721, 48, 333])
+})
+adapter = UnityMLAgentsAdapter(action_mapper=mapper)
+```
+
+The game integration must verify the table against its Unity protocol. The adapter
+never derives it from arrow IDs or observation order. For changing mappings,
+implement `ActionMapper.validate(action_count)`, `action_spec()`,
+`from_index(index, observation)` and `to_index(action, observation)`. `to_index`
+must raise `ValueError` for an unknown semantic action. The backend checks its
+integer result against bounds and the cached availability mask. ML-Agents mask
+`True` disables an action; a missing mask enables the entire branch; an all-True
+mask produces `[]`. Rejected actions return `invalid_reason` without sending a
+command, advancing Unity, or crediting a reward.
+
+For semantic observations, implement `ObservationCodec` or subclass
+`RawObservationCodec`: `decode(observations)` receives copied, unbatched NumPy
+sensor arrays; `observation_spec()` describes its output. Set
+`canonicalization_version` to a non-empty game/protocol-specific version only
+when sufficient state is observable and `canonical_state(observation)` produces
+deterministic bytes for semantically equivalent states. The backend caches those
+bytes and creates `<canonicalization_version>:sha256:<digest>` signatures; it
+never uses Python `hash()` or object identity. A raw observation hash alone is not
+proof of complete state. Incompatible canonicalization versions cannot be compared.
+
+Set `goal_semantics=True` only when `game_outcome(observation)` decodes an explicit
+game protocol signal into `"SUCCESS"`, `"FAILURE"` or `None` (unknown).
+`goal_test()` then returns `True`, `False` or `None` respectively. Rewards,
+`EndEpisode()` and the absence of legal actions never establish success or failure.
+Callbacks must be deterministic and free of transport/game side effects.
+
+| Capability | Current support |
+| --- | --- |
+| Behavior selection | Explicit exact name, or automatic when exactly one exists |
+| Agent/action space | One agent, one discrete branch, no continuous actions |
+| Current level | `load_level("static")` is an explicit no-op; `reset()` resets Unity |
+| Sensors/actions | Cached observations, legal action enumeration and mask validation |
+| Delayed decisions | Up to `max_wait_steps` additional simulation advances (default 100) |
+| Canonical state/outcomes | Only when the configured codec explicitly supports them |
+| Clone/restore | `clone_state()` returns `None`; restoration raises `EnvironmentError` |
+| Arbitrary levels, runtime seed, historical state queries | Unsupported; raise `EnvironmentError` |
+| Deterministic replay, transition model, headless/parallel safety | No capability claim |
+| Game event instrumentation | Unsupported; `events()` and step events are empty lists |
+
+A terminal observation is cached and ends action availability until an explicit
+reset. A terminal takes precedence if the same agent also appears in decisions.
+Different agent IDs in the same batch are conservatively rejected. A changed
+agent ID without termination is a technical error, not a fresh episode.
+Non-interrupted termination sets `game_terminal`; ML-Agents interruption sets
+`test_boundary_reached`. Neither is a confirmed game outcome on its own.
+Multiple registered behaviors are allowed when selected explicitly, but other
+active agents/behaviors are rejected before stepping: ML-Agents would otherwise
+apply implicit zero actions to them. Undetected hidden agents remain a game
+integration responsibility; simultaneous multi-agent control is unsupported.
+
+Connection/reset/step failures, malformed protocol data and exhausted waiting
+limits raise the existing `playtest.core.errors.EnvironmentError` and close the
+acquired environment. Cleanup failures preserve the original failure context.
+`close()` is idempotent and final, including after failed initialization.
+The ML-Agents constructor owns resources it creates before returning; its own
+failure cleanup applies when construction raises before the adapter acquires it.
+
+For Sprint S4, keep environment `seed=None`; `RandomPolicy(seed=...)` can still
+seed action selection independently. The current Runner propagates technical
+exceptions and needs orchestration-level error recording/cancellation later.
+It reports unknown termination as `GAME_TERMINAL`, interruption as
+`TEST_BOUNDARY_REACHED`, and no actions as `NO_VALID_ACTIONS`. A terminal received
+during reset also appears as no actions to the current Runner because reset
+returns only an observation. Reconcile PGD claims with runtime capabilities:
+`examples/arrow_grid/playtest.yaml` describes a richer abstract example and is
+not proof that this Unity integration supports cloning, replay or full state.
+Each game's decision hook must guarantee logical gameplay completion. Waiting is
+bounded by advances, with `timeout_wait` per network call, not a strict total
+wall-time or cancellation budget. Real Editor and repeated-episode reliability
+must be checked manually before S4 batch use.
