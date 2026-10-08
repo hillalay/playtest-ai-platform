@@ -563,3 +563,46 @@ def test_manual_smoke_reports_no_actions_without_sending_one(unity, capsys):
     assert unity.reset_count == 2 and unity.close_count == 1
     assert not unity.sent and unity.step_count == 0
     assert "No legal actions" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("reward", [-10.0, 10.0])
+def test_auto_episode_decision_cannot_replace_terminal_before_explicit_reset(
+    bridge, interrupted, reward
+):
+    adapter, env = bridge
+    initial = {"observations": [[1.25, 2.5]]}
+    env.frames.append((
+        Steps(values=(99, 99), mask=[np.zeros((1, 5), dtype=bool)]),
+        Steps(values=(0, 0), interrupted=interrupted, reward=reward),
+    ))
+    result = adapter.step(action(2))
+    assert result.next_observation == {"observations": [[0.0, 0.0]]}
+    assert result.game_terminal is (not interrupted)
+    assert result.test_boundary_reached is interrupted
+    assert result.game_outcome is None and adapter.goal_test() is None
+    assert adapter.valid_actions() == []
+    assert adapter.step(action(0)).invalid_reason
+    assert len(env.sent) == 1 and env.step_count == 1 and env.reset_count == 1
+
+    # Simulate the fresh state returned by an explicit Unity reset, with a new ID.
+    env.decision = Steps(ids=(18,), mask=[np.array([[True, False, True, True, True]])])
+    env.terminal = empty()
+    assert adapter.reset() == initial
+    assert adapter.valid_actions() == [action(1)]
+    assert adapter.step(action(2)).invalid_reason
+    assert env.reset_count == 2 and len(env.sent) == 1
+    adapter.step(action(1))
+    assert len(env.sent) == 2
+    assert result.next_observation == {"observations": [[0.0, 0.0]]}
+
+
+def test_no_valid_actions_does_not_infer_game_failure(bridge):
+    adapter, env = bridge
+    env.frames.append((Steps(mask=[np.ones((1, 5), dtype=bool)]), empty()))
+    result = adapter.step(action(2))
+    assert adapter.valid_actions() == []
+    assert result.game_outcome is None and adapter.goal_test() is None
+    assert not result.game_terminal and not result.test_boundary_reached
+    assert adapter.step(action(0)).invalid_reason
+    assert len(env.sent) == 1 and env.step_count == 1

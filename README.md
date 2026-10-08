@@ -160,3 +160,61 @@ Each game's decision hook must guarantee logical gameplay completion. Waiting is
 bounded by advances, with `timeout_wait` per network call, not a strict total
 wall-time or cancellation budget. Real Editor and repeated-episode reliability
 must be checked manually before S4 batch use.
+
+### Manual 100-episode stability check (Sprint S3)
+
+Run this manually in the configured static scene using Python 3.10. Start the
+script, then press Play in Unity Editor when it waits for the connection:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\unity_adapter_stability.py --episodes 100 --max-steps 50
+```
+
+Defaults are `--episodes 100`, `--max-steps 50`, `--timeout-wait 120` and
+`--max-wait-steps 100`. Use `--behavior 'YourBehavior?team=0'` for an exact
+behavior name, or `--file-name 'C:\path\Game.exe'` to launch a compatible build.
+Episodes, action budget and connection timeout must be positive integers;
+`--max-wait-steps` may be zero. Network calls use `--timeout-wait`; there is no
+separate overall wall-time deadline.
+
+The script keeps one adapter/environment connection for the whole run. Every
+episode explicitly resets, then selects the first action in the current valid
+action list. It stops that episode on `GAME_TERMINAL`, `TEST_BOUNDARY_REACHED`,
+`NO_VALID_ACTIONS` or `STEP_LIMIT_REACHED`. It never sends an action after a
+terminal, and never substitutes an action for an empty mask. A terminal received
+during reset is reported with `terminal_on_reset=true`, rather than as no actions.
+Simultaneous terminal/decision batches use the adapter's existing rules: terminal
+takes priority for the same ID; distinct IDs are conservatively rejected.
+
+The first reset's raw observation and valid action list form an exact comparison
+baseline. Every subsequent reset must match both. `RESET_MISMATCH` stops the run
+before another action. This is a regression check for this static deterministic
+test scene, **not canonical state, full-state proof, or a determinism guarantee
+for other Unity games**. Sensor order and valid action order participate in the
+comparison. The raw codec leaves game success/failure unknown, regardless of
+rewards, termination or lack of legal actions.
+
+Output is flushed JSON Lines: `start`, `reset`, `step`, `episode`, then `summary`.
+Reset entries include observations, valid actions and baseline comparison; step
+entries include the action, returned observation, reward and terminal/boundary
+flags. Each episode includes its stop reason, flags, returned step count, last
+attempted step, last known observation, error and timings. Episode duration
+includes reset and step reporting; reset duration measures `adapter.reset()`
+only, including the initial connection. Averages include all attempted episodes,
+including failed attempts, and exclude final connection cleanup.
+
+The summary counts requested, attempted, completed and unattempted episodes,
+each stop reason, technical errors and reset mismatches. Completed means an
+episode reached one of the four normal stop reasons; it does not mean a game
+win. Technical failures and mismatches stop the entire run, so the remaining
+requested episodes are reported as unattempted. Cleanup errors are also reported
+and counted as technical errors. `close()` runs in `finally`, including after a
+keyboard interruption. Exit codes: `0` for all requested episodes completed with
+no cleanup error, `1` for a technical failure or reset mismatch, `2` for invalid
+CLI arguments, and `130` for keyboard interruption.
+
+The offline pytest suite uses fake Unity transport; it does not open Unity.
+The existing spike and smoke scripts remain separate manual checks. Unity C#
+sources are outside this repository and have not been changed. **Sprint S3
+remains open until the real Unity 100-episode command has been run successfully
+and its episode/summary output reviewed.**
