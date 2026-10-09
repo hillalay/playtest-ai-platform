@@ -35,7 +35,8 @@ def empty():
 
 def behavior(branches=(5,), continuous=0, shapes=((2,),)):
     return SimpleNamespace(
-        action_spec=SimpleNamespace(continuous_size=continuous, discrete_branches=np.array(branches)),
+        action_spec=SimpleNamespace(
+            continuous_size=continuous, discrete_branches=np.array(branches)),
         observation_specs=[SimpleNamespace(shape=shape) for shape in shapes],
     )
 
@@ -44,7 +45,8 @@ class FakeUnity:
     def __init__(self):
         self.kwargs = None
         self.behavior_specs = {"Game": behavior()}
-        self.decision = Steps(mask=[np.array([[True, True, False, False, True]])])
+        self.decision = Steps(
+            mask=[np.array([[True, True, False, False, True]])])
         self.terminal = empty()
         self.other_steps = (empty(), empty())
         self.frames = deque()
@@ -107,7 +109,8 @@ def test_lazy_connection_and_reset_observation(unity):
     assert unity.reset_count == 1
     assert observation == {"observations": [[1.25, 2.5]]}
     observation["observations"][0][0] = 99
-    assert adapter.step(action(0)).next_observation == {"observations": [[1.25, 2.5]]}
+    assert adapter.step(action(0)).next_observation == {
+        "observations": [[1.25, 2.5]]}
     assert "observations" in adapter.observation_spec()
     assert "unity_discrete" in adapter.action_spec()
     adapter.close()
@@ -208,26 +211,30 @@ def test_semantic_mapping_does_not_assume_entity_id_equals_index(unity):
                                        Action("select_arrow", {"arrow_id": 48})]
     adapter.valid_actions()[0].params["arrow_id"] = -2
     assert adapter.step(Action("select_arrow", {"arrow_id": 2})).invalid_reason
-    assert adapter.step(Action("select_arrow", {"arrow_id": 90})).invalid_reason
+    assert adapter.step(
+        Action("select_arrow", {"arrow_id": 90})).invalid_reason
     assert not unity.sent
     adapter.step(Action("select_arrow", {"arrow_id": 721}))
     np.testing.assert_array_equal(unity.sent[0], [[2]])
     assert unity.sent[0].dtype == np.int32
-    assert adapter.action_spec()["index_to_action"][2].params == {"arrow_id": 721}
+    assert adapter.action_spec()["index_to_action"][2].params == {
+        "arrow_id": 721}
     adapter.close()
 
 
 @pytest.mark.parametrize("mapping", [{0: Action("a")}, {i: Action("same") for i in range(5)},
-                                      {i: "bad" for i in range(5)}])
+                                     {i: "bad" for i in range(5)}])
 def test_incomplete_or_ambiguous_mapping_fails_during_initialization(unity, mapping):
     with pytest.raises(EnvironmentError, match="mapping"):
-        UnityMLAgentsAdapter(action_mapper=DiscreteActionMapper(mapping)).reset()
+        UnityMLAgentsAdapter(
+            action_mapper=DiscreteActionMapper(mapping)).reset()
     assert unity.close_count == 1 and not unity.sent
 
 
 def test_step_refreshes_observation_and_mask_with_defensive_copies(bridge):
     adapter, env = bridge
-    env.frames.append((Steps(values=(9.5, 4.25), mask=[np.array([[False] * 5])]), empty()))
+    env.frames.append(
+        (Steps(values=(9.5, 4.25), mask=[np.array([[False] * 5])]), empty()))
     result = adapter.step(action(2))
     assert env.step_count == 1
     assert result.next_observation == {"observations": [[9.5, 4.25]]}
@@ -236,7 +243,8 @@ def test_step_refreshes_observation_and_mask_with_defensive_copies(bridge):
     env.decision.obs[0][0][0] = -2
     env.decision.action_mask[0][:] = True
     assert adapter.valid_actions() == [action(i) for i in range(5)]
-    assert adapter.step(action(-1)).next_observation == {"observations": [[9.5, 4.25]]}
+    assert adapter.step(
+        action(-1)).next_observation == {"observations": [[9.5, 4.25]]}
     assert adapter.canonical_state() is None
     assert result.state_signature is None
 
@@ -245,7 +253,8 @@ def test_multiple_observation_tensors_need_no_game_specific_layout(unity):
     unity.behavior_specs["Game"] = behavior(shapes=((2,), (2, 2, 1)))
     unity.decision.obs.append(np.ones((1, 2, 2, 1), dtype=np.float32))
     adapter = UnityMLAgentsAdapter()
-    assert adapter.reset()["observations"] == [[1.25, 2.5], [[[1.0], [1.0]], [[1.0], [1.0]]]]
+    assert adapter.reset()["observations"] == [
+        [1.25, 2.5], [[[1.0], [1.0]], [[1.0], [1.0]]]]
     adapter.close()
 
 
@@ -260,7 +269,8 @@ def test_initial_reset_waits_without_sending_actions(unity):
 
 def test_delayed_decision_after_action_does_not_resend_or_reset(bridge):
     adapter, env = bridge
-    env.frames.extend([(empty(), empty()), (empty(), empty()), (Steps(values=(8, 3)), empty())])
+    env.frames.extend([(empty(), empty()), (empty(), empty()),
+                      (Steps(values=(8, 3)), empty())])
     result = adapter.step(action(2))
     assert result.next_observation == {"observations": [[8.0, 3.0]]}
     assert len(env.sent) == 1 and env.step_count == 3 and env.reset_count == 1
@@ -275,7 +285,7 @@ def test_wait_limit_closes_instead_of_using_stale_state(unity, during_reset):
     else:
         adapter.reset()
         unity.frames.append((empty(), empty()))
-        operation = lambda: adapter.step(action(2))
+        def operation(): return adapter.step(action(2))
     with pytest.raises(EnvironmentError, match="after 2 waiting steps"):
         operation()
     assert unity.step_count == (2 if during_reset else 3)
@@ -287,7 +297,8 @@ def test_wait_limit_closes_instead_of_using_stale_state(unity, during_reset):
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_delayed_terminal_preserves_last_observation_and_unknown_outcome(bridge, interrupted):
     adapter, env = bridge
-    env.frames.extend([(empty(), empty()), (empty(), Steps(values=(7, 0), interrupted=interrupted))])
+    env.frames.extend(
+        [(empty(), empty()), (empty(), Steps(values=(7, 0), interrupted=interrupted))])
     result = adapter.step(action(2))
     assert result.next_observation == {"observations": [[7.0, 0.0]]}
     assert result.game_terminal is (not interrupted)
@@ -297,7 +308,8 @@ def test_delayed_terminal_preserves_last_observation_and_unknown_outcome(bridge,
     assert adapter.valid_actions() == []
     calls = env.step_count
     assert adapter.step(action(2)).invalid_reason
-    assert env.step_count == calls and env.reset_count == 1 and len(env.sent) == 1
+    assert env.step_count == calls and env.reset_count == 1 and len(
+        env.sent) == 1
 
 
 def test_terminal_takes_priority_over_same_agent_decision(bridge):
@@ -396,11 +408,12 @@ def test_unsupported_capabilities_are_explicit(bridge):
     caps = adapter.capabilities()
     assert caps["valid_actions"] is True
     assert all(caps[key] is False for key in ["canonical_state", "clone_restore", "goal_semantics",
-                                            "level_loading", "seed", "deterministic", "transition_model",
-                                            "event_instrumentation", "parallel_safe", "headless"])
+                                              "level_loading", "seed", "deterministic", "transition_model",
+                                              "event_instrumentation", "parallel_safe", "headless"])
     assert caps["canonicalization_version"] is None
     for operation in [lambda: adapter.load_level("other"), lambda: adapter.load_level("static", seed=1),
-                      lambda: adapter.reset(seed=42), lambda: adapter.valid_actions({}),
+                      lambda: adapter.reset(
+                          seed=42), lambda: adapter.valid_actions({}),
                       lambda: adapter.goal_test({}), lambda: adapter.restore_state({})]:
         with pytest.raises(EnvironmentError):
             operation()
@@ -429,7 +442,8 @@ def test_constructor_failure_is_wrapped_and_close_remains_safe(unity, monkeypatc
     def fail(**kwargs):
         raise OSError("connection refused")
 
-    monkeypatch.setattr(sys.modules["mlagents_envs.environment"], "UnityEnvironment", fail)
+    monkeypatch.setattr(
+        sys.modules["mlagents_envs.environment"], "UnityEnvironment", fail)
     adapter = UnityMLAgentsAdapter()
     with pytest.raises(EnvironmentError, match="connection refused"):
         adapter.reset()
@@ -469,7 +483,8 @@ def test_cleanup_error_does_not_hide_original_failure(bridge, monkeypatch):
         raise OSError("close failed")
 
     monkeypatch.setattr(env, "close", bad_close)
-    monkeypatch.setattr(env, "step", lambda: (_ for _ in ()).throw(RuntimeError("disconnect")))
+    monkeypatch.setattr(env, "step", lambda: (
+        _ for _ in ()).throw(RuntimeError("disconnect")))
     with pytest.raises(EnvironmentError, match="disconnect.*cleanup also failed.*close failed"):
         adapter.step(action(2))
     adapter.close()
@@ -529,7 +544,8 @@ def test_invalid_wait_configuration_fails_before_connecting(unity, kwargs):
 
 def test_adapter_import_does_not_require_mlagents():
     code = "import sys; sys.modules['mlagents_envs'] = None; from playtest.adapters.unity_mlagents import UnityMLAgentsAdapter; assert UnityMLAgentsAdapter().capabilities()['canonical_state'] is False"
-    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
+    subprocess.run([sys.executable, "-c", code], check=True,
+                   capture_output=True, text=True)
 
 
 def test_existing_runner_and_random_policy_preserve_unknown_terminal(unity):
@@ -586,7 +602,8 @@ def test_auto_episode_decision_cannot_replace_terminal_before_explicit_reset(
     assert len(env.sent) == 1 and env.step_count == 1 and env.reset_count == 1
 
     # Simulate the fresh state returned by an explicit Unity reset, with a new ID.
-    env.decision = Steps(ids=(18,), mask=[np.array([[True, False, True, True, True]])])
+    env.decision = Steps(
+        ids=(18,), mask=[np.array([[True, False, True, True, True]])])
     env.terminal = empty()
     assert adapter.reset() == initial
     assert adapter.valid_actions() == [action(1)]
